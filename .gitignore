@@ -1,0 +1,55 @@
+# ============================================================
+# DocAgent .gitignore
+# ============================================================
+
+# ----- Python -----
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+
+# 虚拟环境（uv / venv）
+.venv/
+venv/
+env/
+
+# ----- 环境变量（密钥不入库，模板保留） -----
+.env
+.env.local
+
+# ----- AI 工作记忆（会话日志/项目笔记，不入库） -----
+.workbuddy/
+
+# ----- Docker 数据卷与运行产物 -----
+# data/ 为四库容器挂载目录（仅保留占位文件）
+data/*
+!data/.gitkeep
+# ChromaDB 本机持久化目录（容器方式下数据在 data/chroma）
+chroma_data/
+
+# ----- 日志 -----
+logs/
+*.log
+
+# ----- 前端 (Vue3 + Vite) -----
+node_modules/
+frontend/dist/
+frontend/.vite/
+*.local
+
+# ----- IDE / 编辑器 -----
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ----- 操作系统 -----
+.DS_Store
+Thumbs.db

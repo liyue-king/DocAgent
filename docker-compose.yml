@@ -1,0 +1,102 @@
+# ============================================================
+# DocAgent 基础设施一键启动（Day 1 交付物）
+# 启动：docker compose up -d
+# 停止：docker compose down
+# 清理数据（删除容器+数据卷）：docker compose down -v
+# 数据落盘：默认 ./data 目录；可通过环境变量覆盖，例如：
+#   Windows:  VOLUME_BASE=D:/DocAgent/data docker compose up -d
+#   或直接修改下方 ${VOLUME_BASE:-./data} 为绝对路径
+# ============================================================
+
+# 定义网络，让所有容器在同一个局域网内互访
+networks:
+  docagent-net:
+    driver: bridge
+
+services:
+  # ---------- 1. MySQL 业务数据库 ----------
+  mysql:
+    image: mysql:8.0
+    container_name: docagent-mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: docagent123
+      MYSQL_DATABASE: docagent
+      # 解决 Windows 下中文乱码问题
+      MYSQL_CHARACTER_SET_SERVER: utf8mb4
+      MYSQL_COLLATION_SERVER: utf8mb4_unicode_ci
+    ports:
+      # 宿主机 3306 已被本机 MySQL(mysqld) 占用，容器映射改到 3307，两者共存
+      - "3307:3306"
+    volumes:
+      - ${VOLUME_BASE:-./data}/mysql:/var/lib/mysql
+    networks:
+      - docagent-net
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------- 2. Redis 缓存与队列 ----------
+  redis:
+    image: redis:7.0-alpine
+    container_name: docagent-redis
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - ${VOLUME_BASE:-./data}/redis:/data
+    # 开启持久化，防止重启丢数据
+    command: redis-server --appendonly yes --appendfsync everysec
+    networks:
+      - docagent-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------- 3. MinIO 文件存储（对象存储） ----------
+  minio:
+    image: minio/minio:RELEASE.2024-01-16T16-07-38Z
+    container_name: docagent-minio
+    restart: always
+    ports:
+      - "9000:9000"   # API 端口（代码连接用）
+      - "9001:9001"   # 管理后台 Web 界面（http://localhost:9001）
+    environment:
+      MINIO_ROOT_USER: docagent
+      MINIO_ROOT_PASSWORD: docagent123
+    volumes:
+      - ${VOLUME_BASE:-./data}/minio:/data
+    command: server /data --console-address ":9001"
+    networks:
+      - docagent-net
+    # 注意：minio 镜像内没有 curl，healthcheck 必须用内置 mc 客户端
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ---------- 4. ChromaDB 向量数据库（RAG 核心） ----------
+  chromadb:
+    image: chromadb/chroma:0.5.0
+    container_name: docagent-chroma
+    restart: always
+    ports:
+      - "8000:8000"
+    volumes:
+      - ${VOLUME_BASE:-./data}/chroma:/chroma/chroma
+    environment:
+      ANONYMIZED_TELEMETRY: FALSE          # 关闭匿名统计，提升隐私
+      IS_PERSISTENT: TRUE                  # 开启持久化
+      CHROMA_SERVER_CORS_ALLOW_ORIGINS: '["*"]' # 允许跨域（前端调试方便）；注意必须是 JSON 数组格式
+    networks:
+      - docagent-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
