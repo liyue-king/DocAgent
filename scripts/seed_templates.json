@@ -1,0 +1,142 @@
+[
+  {
+    "name": "学术论文（本科毕业论文）",
+    "category": "academic",
+    "description": "适用于本科毕业论文、学士学位论文的排版格式，正文宋体小四号字，一级标题黑体三号加粗，1.5倍行距，符合国内高校论文格式规范要求",
+    "config": {
+      "version": "1.0",
+      "paragraph_styles": {
+        "heading_1": {"font_name": "黑体", "font_size_pt": 16, "bold": true,  "space_before_pt": 24, "space_after_pt": 12, "line_spacing_rule": "MULTIPLE", "line_spacing_value": 1.5},
+        "heading_2": {"font_name": "黑体", "font_size_pt": 14, "bold": true,  "space_before_pt": 18, "space_after_pt": 6,  "line_spacing_rule": "MULTIPLE", "line_spacing_value": 1.5},
+        "heading_3": {"font_name": "黑体", "font_size_pt": 12, "bold": true,  "space_before_pt": 12, "space_after_pt": 3,  "line_spacing_rule": "MULTIPLE", "line_spacing_value": 1.5},
+        "normal":    {"font_name": "宋体", "font_size_pt": 12, "bold": false, "space_before_pt": 0,  "space_after_pt": 0,  "line_spacing_rule": "MULTIPLE", "line_spacing_value": 1.5}
+      }
+    }
+  },
+  {
+    "name": "学术期刊论文",
+    "category": "academic",
+    "description": "适用于学术期刊、会议论文的排版，正文宋体五号字，标题黑体四号加粗，单倍行距，排版紧凑适合双栏期刊格式",
+    "config": {
+      "version": "1.0",
+      "paragraph_styles": {
+        "heading_1": {"font_name": "黑体", "font_size_pt": 14, "bold": true,  "space_before_pt": 18, "space_after_pt": 6,  "line_spacing_rule": "SINGLE"},
+        "heading_2": {"font_name": "黑体", "font_size_pt": 10.5, "bold": true, "space_before_pt": 12, "space_after_pt": 3,  "line_spacing_rule": "SINGLE"},
+        "heading_3": {"font_name": "黑体", "font_size_pt": 10.5, "bold": true, "space_before_pt": 6,  "space_after_pt": 2,  "line_spacing_rule": "SINGLE"},
+        "normal":    {"font_name": "宋体", "font_size_pt": 10.5, "bold": false, "space_before_pt": 0,  "space_after_pt": 0,  "line_spacing_rule": "SINGLE"}
+      }
+    }
+  },
+  {
+    "name": "商务标书（投标文件）",
+    "category": "business",
+    "description": "适用于商务投标文件、项目标书的正式排版，正文宋体小四号字，标题黑体小二加粗，1.25倍行距，版式庄重大气符合商业规范",
+    "config": {
+      "version": "1.0",
+      "paragraph_styles": {
+        "heading_1": {"font_name": "黑体", "font_size_pt": 18, "bold": true,  "space_before_pt": 24, "space_after_pt": 12, "line_spacing_rule": "MULTIPLE", "line_spacing_value": 1.25},
+        "heading_2": {"font_name": "黑体", "font_size_pt": 16, "bold": false, "space_before_pt": 18, "space_after_pt": 6,  "line_spacing_rule": "MULTIPLE", "line_spacing_value": 1.25},
+        "heading_3": {"font_name": "宋体", "font_size_pt": 14, "bold": true,  "space_before_pt": 12, "space_after_pt": 3,  "line_spacing_rule": "MULTIPLE", "line_spacing_value": 1.25},
+        "normal":    {"font_name": "宋体", "font_size_pt": 12, "bold": false, "space_before_pt": 0,  "space_after_pt": 0,  "line_spacing_rule": "MULTIPLE", "line_spacing_value": 1.25}
+      }
+    }
+  },
+  {
+    "name": "商业计划书",
+    "category": "business",
+    "description": "适用于创业计划书、可行性研究、项目方案等商业文档，正文宋体四号字，标题黑体二号，1.5倍行距，条理清晰适合长篇汇报",
+    "config": {
+      "version": "1.0",
+      "paragraph_styles": {
+        "heading_1": {"font_name": "黑体", "font_size_pt": 22, "bold": true,  "space_before_pt": 30, "space_after_pt": 15, "line_spacing_rule": "MULTIPLE", "line_spacing_value": 1.5},
+        "heading_2": {"font_name": "黑体", "font_size_pt": 16, "bold": false, "space_before_pt": 20, "space_after_pt": 8,  "line_spacing_rule": "MULTIPLE", "line_spacing_value": 1.5},
+        "heading_3": {"font_name": "宋体", "font_size_pt": 14, "bold": true,  "space_before_pt": 12, "space_after_pt": 4,  "line_spacing_rule": "MULTIPLE", "line_spacing_value": 1.5},
+        "normal":    {"font_name": "宋体", "font_size_pt": 14, "bold": false, "space_before_pt": 0,  "space_after_pt": 0,  "line_spacing_rule": "MULTIPLE", "line_spacing_value": 1.5}
+      }
+    }
+  },
+  {
+    "name": "商业合同",
+    "category": "business",
+    "description": "适用于商业合同、协议书的排版，正文宋体小四号字，标题黑体三号加粗，固定行距28磅，格式严谨符合法律文书要求",
+    "config": {
+      "version": "1.0",
+      "paragraph_styles": {
+        "heading_1": {"font_name": "黑体", "font_size_pt": 16, "bold": true,  "space_before_pt": 24, "space_after_pt": 12, "line_spacing_rule": "EXACTLY", "line_spacing_value": 28},
+        "heading_2": {"font_name": "黑体", "font_size_pt": 14, "bold": false, "space_before_pt": 18, "space_after_pt": 6,  "line_spacing_rule": "EXACTLY", "line_spacing_value": 28},
+        "heading_3": {"font_name": "宋体", "font_size_pt": 12, "bold": true,  "space_before_pt": 12, "space_after_pt": 3,  "line_spacing_rule": "EXACTLY", "line_spacing_value": 28},
+        "normal":    {"font_name": "宋体", "font_size_pt": 12, "bold": false, "space_before_pt": 0,  "space_after_pt": 0,  "line_spacing_rule": "EXACTLY", "line_spacing_value": 28}
+      }
+    }
+  },
+  {
+    "name": "政府公文（红头文件）",
+    "category": "government",
+    "description": "适用于党政机关公文、红头文件的排版，正文仿宋三号字，标题黑体二号，一级标题黑体三号，固定行距28磅，符合GB/T 9704党政机关公文格式标准",
+    "config": {
+      "version": "1.0",
+      "paragraph_styles": {
+        "heading_1": {"font_name": "黑体", "font_size_pt": 22, "bold": false, "space_before_pt": 30, "space_after_pt": 15, "line_spacing_rule": "EXACTLY", "line_spacing_value": 28},
+        "heading_2": {"font_name": "黑体", "font_size_pt": 16, "bold": false, "space_before_pt": 20, "space_after_pt": 8,  "line_spacing_rule": "EXACTLY", "line_spacing_value": 28},
+        "heading_3": {"font_name": "楷体", "font_size_pt": 16, "bold": false, "space_before_pt": 12, "space_after_pt": 4,  "line_spacing_rule": "EXACTLY", "line_spacing_value": 28},
+        "normal":    {"font_name": "仿宋", "font_size_pt": 16, "bold": false, "space_before_pt": 0,  "space_after_pt": 0,  "line_spacing_rule": "EXACTLY", "line_spacing_value": 28}
+      }
+    }
+  },
+  {
+    "name": "工作总结报告",
+    "category": "government",
+    "description": "适用于政府部门工作总结、述职报告的排版，正文宋体小四号字，标题黑体三号加粗，1.5倍行距，结构分明适合长文汇报",
+    "config": {
+      "version": "1.0",
+      "paragraph_styles": {
+        "heading_1": {"font_name": "黑体", "font_size_pt": 16, "bold": true,  "space_before_pt": 24, "space_after_pt": 12, "line_spacing_rule": "MULTIPLE", "line_spacing_value": 1.5},
+        "heading_2": {"font_name": "黑体", "font_size_pt": 14, "bold": true,  "space_before_pt": 18, "space_after_pt": 6,  "line_spacing_rule": "MULTIPLE", "line_spacing_value": 1.5},
+        "heading_3": {"font_name": "宋体", "font_size_pt": 12, "bold": true,  "space_before_pt": 12, "space_after_pt": 3,  "line_spacing_rule": "MULTIPLE", "line_spacing_value": 1.5},
+        "normal":    {"font_name": "宋体", "font_size_pt": 12, "bold": false, "space_before_pt": 0,  "space_after_pt": 0,  "line_spacing_rule": "MULTIPLE", "line_spacing_value": 1.5}
+      }
+    }
+  },
+  {
+    "name": "项目研究报告",
+    "category": "report",
+    "description": "适用于工程技术报告、科研项目结题报告的排版，正文宋体五号字，标题黑体小三号，1.25倍行距，紧凑整齐适合技术文档",
+    "config": {
+      "version": "1.0",
+      "paragraph_styles": {
+        "heading_1": {"font_name": "黑体", "font_size_pt": 15, "bold": true,  "space_before_pt": 24, "space_after_pt": 10, "line_spacing_rule": "MULTIPLE", "line_spacing_value": 1.25},
+        "heading_2": {"font_name": "黑体", "font_size_pt": 14, "bold": false, "space_before_pt": 18, "space_after_pt": 6,  "line_spacing_rule": "MULTIPLE", "line_spacing_value": 1.25},
+        "heading_3": {"font_name": "宋体", "font_size_pt": 12, "bold": true,  "space_before_pt": 12, "space_after_pt": 3,  "line_spacing_rule": "MULTIPLE", "line_spacing_value": 1.25},
+        "normal":    {"font_name": "宋体", "font_size_pt": 10.5, "bold": false, "space_before_pt": 0,  "space_after_pt": 0,  "line_spacing_rule": "MULTIPLE", "line_spacing_value": 1.25}
+      }
+    }
+  },
+  {
+    "name": "个人简历",
+    "category": "personal",
+    "description": "适用于个人简历、求职材料的排版，正文宋体小四号字，标题黑体四号加粗，单倍行距，排版紧凑适合一页展示",
+    "config": {
+      "version": "1.0",
+      "paragraph_styles": {
+        "heading_1": {"font_name": "黑体", "font_size_pt": 14, "bold": true,  "space_before_pt": 18, "space_after_pt": 6,  "line_spacing_rule": "SINGLE"},
+        "heading_2": {"font_name": "黑体", "font_size_pt": 10.5, "bold": true,  "space_before_pt": 12, "space_after_pt": 3,  "line_spacing_rule": "SINGLE"},
+        "heading_3": {"font_name": "黑体", "font_size_pt": 10.5, "bold": false, "space_before_pt": 6,  "space_after_pt": 2,  "line_spacing_rule": "SINGLE"},
+        "normal":    {"font_name": "宋体", "font_size_pt": 12, "bold": false, "space_before_pt": 0,  "space_after_pt": 0,  "line_spacing_rule": "SINGLE"}
+      }
+    }
+  },
+  {
+    "name": "通用标准模板",
+    "category": "default",
+    "description": "通用标准排版模板，适用于未明确格式要求的文档，正文宋体小四号字，标题黑体三号加粗，1.5倍行距，作为RAG检索兜底方案",
+    "config": {
+      "version": "1.0",
+      "paragraph_styles": {
+        "heading_1": {"font_name": "黑体", "font_size_pt": 16, "bold": true,  "space_before_pt": 24, "space_after_pt": 12, "line_spacing_rule": "MULTIPLE", "line_spacing_value": 1.5},
+        "heading_2": {"font_name": "黑体", "font_size_pt": 14, "bold": true,  "space_before_pt": 18, "space_after_pt": 6,  "line_spacing_rule": "MULTIPLE", "line_spacing_value": 1.5},
+        "heading_3": {"font_name": "黑体", "font_size_pt": 12, "bold": true,  "space_before_pt": 12, "space_after_pt": 3,  "line_spacing_rule": "MULTIPLE", "line_spacing_value": 1.5},
+        "normal":    {"font_name": "宋体", "font_size_pt": 12, "bold": false, "space_before_pt": 0,  "space_after_pt": 0,  "line_spacing_rule": "MULTIPLE", "line_spacing_value": 1.5}
+      }
+    }
+  }
+]

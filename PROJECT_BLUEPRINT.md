@@ -1,11 +1,11 @@
-# DocAgent 完整需求与系统设计说明书（优化版 v5.1）
+# DocAgent 完整需求与系统设计说明书（v5.2）
 
 > 本文档为项目唯一蓝图（Single Source of Truth），AI 结对编程（Vibe Coding）时请严格按此实现。
 
 | 文档信息     | 内容                                                         |
 | :----------- | :----------------------------------------------------------- |
 | **项目名称** | DocAgent - 基于多智能体协作的智能文档处理平台                |
-| **文档版本** | v5.1（基于 v5.0 优化：统一口径、补全状态映射 / 错误码 / 里程碑）|
+| **文档版本** | v5.2（基于 v5.1 修正：State Schema 序列化安全、Planner 双路径、重试闭环增量修补、三道验证关口、覆盖率校验补齐行距/段间距、备份策略落地）|
 | **开发模式** | Vibe Coding（AI 结对编程）                                   |
 | **交付周期** | 7 个自然日（一次性全量交付）                                 |
 | **核心架构** | FastAPI + Celery + LangGraph(Multi-Agent) + RAG(ChromaDB) + MySQL + Redis + MinIO + Vue3 |
@@ -16,6 +16,7 @@
 | :--- | :--------- | :----------------------------------------------------------- |
 | v5.0 | 初版       | 整合战略 / 功能 / 数据 / 状态机 / API / 前端 / 部署全部章节  |
 | v5.1 | 2026-08-01 | 统一「样式覆盖率」「相似度阈值」「状态枚举」「进度区间」口径；新增错误码、三端状态映射、术语表、非功能性需求、目录结构、里程碑 |
+| v5.2 | 2026-08-03 | 修正 State Schema 序列化安全（para_obj 不可持久化）；Planner 增加确定性快路径与 LLM 增量双路径；重试闭环改为增量修补（Validator 输出 missed 详情喂回 Planner）；补全三道验证关口（Planner 输出合法性/Executor 逐条确认/模板 config schema）；覆盖率校验扩展到行距与段间距；备份策略明确为 MinIO + 内存双层 |
 
 ---
 
@@ -52,7 +53,7 @@
 | **性能** | 20 页以内文档全流程处理 **≤ 3 分钟** |
 | **时限** | 7 个自然日全量交付（见第 11 章里程碑） |
 
-> **口径说明（v5.1 统一）**：Validator 以覆盖率 100% 为**重试触发线**（未到 100% 即触发重规划，最多 3 次）；重试耗尽后，覆盖率 **≥ 98% 判成功**，**< 98% 判失败**。三档口径：`100%` = 重试触发线，`≥98%` = 成功验收线，`<98%` = 失败线。
+> **口径说明（v5.1 统一，v5.2 扩展）**：Validator 以覆盖率 100% 为**重试触发线**（未到 100% 即触发重规划，最多 3 次）；重试耗尽后，覆盖率 **≥ 98% 判成功**，**< 98% 判失败**。三档口径：`100%` = 重试触发线，`≥98%` = 成功验收线，`<98%` = 失败线。**v5.2 校验维度扩展到五项**：字体、字号、加粗、行距（规则与值）、段前段后距均参与覆盖率计算——任一维度不匹配即标记 missed，避免此前仅检查字体/字号/加粗三项导致的"假通过"。
 
 ### 1.3 明确不做（Anti-Goals）
 
@@ -71,6 +72,9 @@
 | DOM 树 | python-docx 解析出的文档结构树：`{"paragraphs":[{"id":0,"style":"Heading1",...}]}` |
 | Supervisor | LangGraph 主调度节点，负责任务拆解与子 Agent 路由 |
 | 原子操作 | Executor 执行的最小修改指令，如 `{"action":"set_font","para_ids":[0,1,2],"font":"黑体"}` |
+| EntryGuard | 位于 Planner 与 Executor 之间的验证节点，校验 task_queue 每条指令合法性（action 白名单、para_ids 非空、必填字段齐全） |
+| 确定性快路径 | Planner 不调 LLM，直接按模板 config 分段生成 task_queue（0 token，<1s） |
+| LLM 增量路径 | Planner 在确定性结果基础上，仅对用户个性化需求生成少量补充指令（~200 tokens） |
 | 预签名 URL | MinIO 生成的限时访问链接（本设计 5 分钟有效） |
 | ILM | 对象存储生命周期策略（本设计 24 小时后自动删除） |
 | Vibe Coding | 以自然语言蓝图驱动 AI 生成代码的开发模式 |
@@ -171,9 +175,10 @@
 | 需求ID | 需求描述 | 验收标准 |
 | :----- | :--- | :--- |
 | FR-C01 | **Supervisor 节点**：解析用户 Prompt，拆解任务，调度 Sub-Agent | LangGraph 编译通过，状态流转正常 |
-| FR-C02 | **Planner 节点**：结合模板配置与文档 DOM 树，生成原子操作任务队列（JSON） | 示例输出 `[{"action":"set_font","para_ids":[0,1,2],"font":"黑体"}]` |
-| FR-C03 | **Executor 节点**：调用 `python-docx` 工具集逐条执行任务队列 | 文档被实际修改，进度条同步更新 |
-| FR-C04 | **Validator 节点**（闭环核心）：修改后二次扫描计算样式覆盖率；未达 100% 生成差异报告并触发 `retry`（最多 3 次） | 失败重试时状态变为 `retrying`，前端黄色闪烁提示 |
+| FR-C02 | **Planner 节点**：结合模板配置与文档 DOM 树，生成原子操作任务队列（JSON）。**双路径设计**：纯模板匹配走确定性算法（零 LLM 调用），含个性化需求时走 LLM 增量补充（仅生成差异指令） | 示例输出 `[{"action":"set_font","para_ids":[0,1,2],"font":"黑体"}]`；确定性路径 <1s 完成 |
+| FR-C03 | **EntryGuard 节点**：逐条校验 Planner 输出的 task_queue，确认 action 在允许白名单内、para_ids 非空、必要字段齐全；非法时触发 Planner 路径切换或硬编码兜底 | task_queue 被拦截率 ≤ 5%（正常场景）；拦截后不崩溃 |
+| FR-C04 | **Executor 节点**：调用 `python-docx` 工具集逐条执行 task_queue，每条记录 `execution_errors`（空段落/越界/未生效）；修改前自动备份至 MinIO | 文档被实际修改；进度条同步更新；execution_errors 完整记录 |
+| FR-C05 | **Validator 节点**（闭环核心）：修改后二次扫描计算字体/字号/加粗/**行距**/**段间距**五项覆盖率；未达 100% 时生成 `missed` 详情列表（para_id、expected、actual、reason）并触发 `retry`（最多 3 次），重试时 Planner 仅针对 missed 段落生成增量修补指令 | 失败重试时状态变为 `retrying`，前端黄色闪烁提示；重试仅针对 missed 段落（非全量） |
 
 > **覆盖率三档口径见 [1.2](#12-smart-目标)**：重试触发线 100%、成功验收线 ≥98%、失败线 <98%。
 
@@ -183,7 +188,7 @@
 | :----- | :--- | :--- |
 | FR-D01 | 支持修改段落样式：字体/字号/加粗/斜体/行距（单倍/1.5 倍/固定值）/段前段后距 | Word 打开后样式面板同步变化 |
 | FR-D02 | 支持识别 `Heading 1` ~ `Heading 3` 并分别应用不同配置 | 大纲视图层级不乱 |
-| FR-D03 | 执行前**自动备份**原始文件至 MinIO 临时目录，修改失败则回滚 | 损坏文件绝不覆盖原文件 |
+| FR-D03 | 执行前**自动备份**原始文件至 MinIO（`backup_object_key`），本地保留内存副本供快速回滚；修改失败则从 MinIO 或内存备份回滚 | 损坏文件绝不覆盖原文件；即使 Worker 崩溃，MinIO 备份仍在 |
 
 ### 模块 E：前端交互（Vue3 + Element-Plus）
 
@@ -348,6 +353,7 @@ CREATE TABLE `agent_logs` (
 | | - 模板配置缓存 | `docagent:template:{id}:config` (Hash) | 86400s |
 | | - IP 限流 | `docagent:ratelimit:{ip}` | 60s |
 | `db=3` | LangGraph Checkpointer（P1 启用） | 自动管理 | 持久 |
+| | | **v5.2 约束**：checkpoint 仅写入 `doc_dom_serial`（纯 JSON），不含 `para_obj` 引用；恢复时 Executor 从 `doc_dom_serial` 重建 `para_obj` 映射 | |
 
 **读写策略**：前端轮询**优先读 Redis**，Key 不存在则降级查 MySQL 并回填 Redis。
 
@@ -401,54 +407,118 @@ docagent-output/{year}/{month}/{day}/{task_id}/modified_{original_filename}.docx
 > 原样写入 `app/agents/state.py`：
 
 ```python
-from typing import TypedDict, List, Dict, Any, Literal
+from typing import TypedDict, List, Dict, Any, Literal, Optional
 
 class DocAgentState(TypedDict):
-    # 输入
+    # ── 输入 ──
     user_prompt: str
     task_id: str
 
-    # RAG 结果
+    # ── RAG 结果 ──
     retrieved_templates: List[Dict[str, Any]]
     selected_template_id: int
-    selected_template_config: Dict[str, Any]  # 模板 JSON
+    selected_template_config: Dict[str, Any]         # 模板 JSON（paragraph_styles）
 
-    # 文档解析
-    doc_dom_tree: Dict[str, Any]  # {"paragraphs": [{"id":0, "style":"Heading1"}, ...]}
+    # ── 文档解析（注意：para_obj 不可序列化，禁止写入 Checkpointer）──
+    doc_dom_serial: Dict[str, Any]                   # 可序列化部分：段落 id/style/text/font/size/bold
+    doc_dom: Optional[Any]                           # 完整 DOM（含 para_obj 引用），仅供 Executor/Validator 内存使用，**不入 Checkpointer**
 
-    # 规划与执行
-    task_queue: List[Dict[str, Any]]  # 原子指令列表
+    # ── 文件引用（MinIO 备份 + 本地工作副本）──
+    input_file_path: str                              # MinIO 输入对象 Key
+    backup_object_key: str                            # MinIO 备份对象 Key（修改前已存入）
+    working_file_path: str                            # 本地临时工作文件路径
+    output_file_path: str                             # 输出文件本地路径
+
+    # ── 规划与执行 ──
+    task_queue: List[Dict[str, Any]]                  # 原子指令列表
     current_task_index: int
     executed_count: int
+    execution_errors: List[Dict[str, Any]]            # 逐条执行失败记录：[{"index":3,"action":"set_font","para_id":5,"reason":"空段落无run"}]
 
-    # 校验闭环
-    validation_report: Dict[str, Any]  # {"coverage": 0.95, "missed": [...], "passed": False}
+    # ── 校验闭环（Validator 输出重试所需增量信息）──
+    validation_report: Dict[str, Any]                 # {"coverage":0.95,"total":10,"matched":8,"missed":[{"para_id":3,"style":"heading_1","expected":"黑体","actual":"Calibri","reason":"font"},...],"passed":False}
     retry_count: int
 
-    # 控制
+    # ── LLM 使用追踪 ──
+    planner_mode: Literal["deterministic", "llm_augmented"]  # 当前 Planner 路径
+    planner_llm_calls: int                             # 本轮 LLM 调用次数（含重试）
+
+    # ── 控制 ──
     status: Literal["idle", "retrieving", "planning", "executing", "validating", "done", "failed"]
     error_message: str
     agent_logs: List[str]
     llm_total_tokens: int
 ```
 
+> **v5.2 变更说明**：
+> - **`doc_dom` 拆为两层**：`doc_dom_serial`（纯 JSON，可持久化） + `doc_dom`（含 `para_obj` 引用，仅供 Executor/Validator 节点在进程内存中使用，**禁止序列化进 Checkpointer**）。若启用 Redis db=3 Checkpointer，checkpoint 仅写入 `doc_dom_serial`，恢复后在 Executor 内重建 `para_obj` 映射。
+> - **新增 `backup_object_key`** 与 **`working_file_path`**：修改前将原始文件备份至 MinIO，本地操作在工作副本上进行，确保原文件绝不丢失。
+> - **`validation_report.missed` 升级为具体列表**：每个未达标段落记录 `para_id`、`style`、`expected`、`actual`、`reason`，Planner 重规划时可据此做**增量修补**，而非盲目全量重生成。
+> - **新增 `execution_errors`**：Executor 逐条记录执行反馈，区分「段落空 run 静默跳过」「字体设置不生效」「id 越界」等失败原因，Controller 据此决策是跳过还是重试。
+> - **新增 `planner_mode` / `planner_llm_calls`**：跟踪 Planner 用确定性算法还是 LLM，控制单文档 LLM 费用 ≤￥0.05。
+
 ### 6.2 节点与流转逻辑
 
 ```text
-supervisor_node ──► rag_searcher ──► planner ──► executor ──► validator
-                                                              │
-            ┌─────────────────────────────────────────────────┤
-            │  passed=False 且 retry_count < 3               │  passed=True
-            ▼                                                 ▼
-        planner（重规划，retry_count+1）                success_node
-                                                              │
+supervisor_node ──► rag_searcher ──► planner ──► entry_guard ──► executor ──► validator
+                   （模板检索）     （决策）    （输出合法性校验）  （逐条执行+确认）  （覆盖率+行距/段间距）
+                                                                          │
+            ┌─────────────────────────────────────────────────────────────┤
+            │  passed=False 且 retry_count < 3                           │  passed=True
+            ▼  （将validation_report.missed 喂回planner做增量修补）        ▼
+        planner（增量重试，retry_count+1）                        success_node
+                                                                          │
         validator 输出 passed=False 且 retry_count >= 3 ──► error_node（强制失败）
 ```
 
-- `supervisor_node`：条件路由 → `rag_searcher` / `planner` / `executor` / `validator`
-- `validator` 输出 `passed=False` 且 `retry_count < 3` → 跳回 `planner`（重规划）
-- `validator` 输出 `passed=True` → 跳转 `success_node`
-- `retry_count >= 3` → 跳转 `error_node`（强制失败）
+#### 各节点职责（v5.2 修订）
+
+| 节点 | 职责 | 输入 | 输出 |
+| :--- | :--- | :--- | :--- |
+| `supervisor_node` | 解析用户 prompt，条件路由 | user_prompt, task_id | 下一节点名称 |
+| `rag_searcher` | 混合检索（向量+BM25+RRF）；相似度 <0.5 降级通用模板 | user_prompt | selected_template_config, confidence_level |
+| **`planner`** | **双路径决策**（详见下方） | selected_template_config, doc_dom_serial, user_prompt, validation_report(重试时) | task_queue, planner_mode |
+| **`entry_guard`** | **输出合法性预检**：校验 task_queue 中每条指令 action 在允许白名单内、para_ids 非空、必要字段齐全 | task_queue | 通过→executor；不通过→记录错误→跳 planner（LLM兜底） |
+| `executor` | 逐条执行 task_queue，逐条写 execution_errors（空段落/字体验证/越界）；修改前备份至 MinIO | doc_dom, task_queue, working_file_path | executed_count, execution_errors |
+| `validator` | 扫描字体/字号/加粗/**行距**/**段间距**五项覆盖率；生成 missed 详情（para_id, style, expected, actual, reason）；若 passed=False，将 missed 写回 validation_report 供 planner 增量重试 | doc_dom, selected_template_config | validation_report |
+| `success_node` | 保存输出文件至 MinIO，更新 MySQL，返回下载 URL | output_file_path | — |
+| `error_node` | 保留最后一次修改结果至 MinIO 供用户下载（即使不达标），置 MySQL status=failed | output_file_path | — |
+
+#### Planner 双路径决策逻辑（v5.2 新增）
+
+Planner 是编排层唯一调用 LLM 的节点，**但 LLM 不是必经之路**——在纯模板匹配场景下走确定性算法，节省成本和延迟：
+
+```text
+RAG_Agent 返回模板 config
+         │
+         ▼
+  ┌─ 用户 prompt 是否含"个性化需求"关键词？ ─┐
+  │  （例："第二章不要加粗""摘要改成楷体"）    │
+  │                                          │
+  ├─ 否（纯模板匹配）──► [确定性快路径] ──────┤
+  │   直接按模板 config 对 DOM 段落分组           │
+  │   生成 task_queue（0 LLM 调用，<1s）          │
+  │   planner_mode = "deterministic"            │
+  │                                             │
+  └─ 是（含个性化需求）──► [LLM 增量路径] ────┤
+      在确定性生成的 task_queue 基础上，              │
+      LLM 仅生成"增量/覆盖"指令补充队列               │
+      （如 {"action":"set_bold","para_ids":[5],"bold":false}）│
+      temperature=0，失败回退确定性结果               │
+      planner_mode = "llm_augmented"                │
+                                                    │
+                                                    ▼
+                                           合并 → task_queue
+```
+
+> **成本控制**：确定性路径 $0（零 LLM 调用）；LLM 增量路径仅针对个性化部分生成少量指令（~200 tokens），单文档 LLM 费用仍 ≤￥0.05。
+
+#### 重试闭环规则（v5.2 修订）
+
+- `entry_guard` 检测 task_queue 非法 → 记录 ERROR 日志 → 若当前为确定性路径则切换到 LLM 路径重试 1 次，若已为 LLM 路径则触发硬编码兜底（全部设宋体 12pt）。
+- `executor` 逐条记录 `execution_errors`，单条失败（如空段落无 run）**不**触发整轮重试，仅标记该段落为 "skipped"。
+- `validator` 输出 `passed=False` 且 `retry_count < 3` → 将 `validation_report.missed` **完整喂回 planner**，planner 仅针对 missed 段落生成增量修补指令（而非全量重规划）。
+- `retry_count >= 3` 且覆盖率仍 < 98% → 跳转 `error_node`（强制失败，保留最后一次修改结果供下载）。
 
 ### 6.3 三端状态映射（v5.1 补全）
 
@@ -492,6 +562,7 @@ supervisor_node ──► rag_searcher ──► planner ──► executor ─�
 | `3001` | 文件已过期删除 | 超过 24h 生命周期 |
 | `4001` | 内部错误 / LLM 服务异常 | LLM 返回 429/400/超时 |
 | `4002` | 文档处理失败 | 重试 3 次后覆盖率仍 < 98% |
+| `4003` | Planner 输出非法指令 | EntryGuard 拦截：action 不在白名单 / para_ids 为空 / 必填字段缺失；LLM 路径兜底后仍非法 |
 | `429` | 触发限流 | 超过 `API_RATE_LIMIT`（10 次/分钟/IP） |
 
 ### 7.3 轮询协议约定
@@ -538,11 +609,16 @@ frontend/src/
 | 异常场景 | 触发条件 | **系统强制响应（硬逻辑）** | 用户提示 |
 | :--- | :--- | :--- | :--- |
 | RAG 检索空 | ChromaDB 最高分 < 0.5 | 自动加载 `default_template.json`（通用宋体黑体） | "未找到高度匹配模板，已应用通用标准" |
-| LLM JSON 解析失败 | Planner 返回非有效 JSON | 重试 1 次（temperature=0），仍失败则执行硬编码（全部改宋体） | "AI 规划走神，已启用备用方案" |
-| python-docx 损坏 | 修改后 `Document()` 加载报错 | **立即回滚**：将 MinIO 备份复制到输出路径 | "文档结构特殊，已安全返回原文件" |
+| 模板 config 字段缺失 | `config.paragraph_styles.normal` 缺 `font_name` 等必要字段 | **schema 预检**：加载模板时立即校验必要字段，缺字段则标记模板为 invalid 并降级 default | "模板配置异常，已切换通用方案" |
+| **EntryGuard 拦截非法指令** | Planner 输出含不在白名单的 action、para_ids 为空、缺少必填字段 | 记录 ERROR 日志；若 Planner 为确定性路径则自动切换 LLM 路径重试 1 次；若已为 LLM 路径则硬编码兜底（全部 set_font: 宋体 12pt） | "AI 规划输出异常，已启用备用方案" |
+| LLM JSON 解析失败 | Planner 返回非有效 JSON | 重试 1 次（temperature=0），仍失败则执行硬编码（全部改宋体 12pt） | "AI 规划走神，已启用备用方案" |
+| Executor 单条指令失败 | 段落无 run（空段落静默跳过）、para_id 越界、字体设置不生效 | 写入 `execution_errors`，标记该段落 skipped，**不中断流程，不触发整轮重试** | （无提示，仅日志记录） |
+| python-docx 损坏 | 修改后 `Document()` 加载报错 | **立即回滚**：从 MinIO 备份或内存备份还原原文件 | "文档结构特殊，已安全返回原文件" |
+| **覆盖率校验维度假通过** | Validator 仅检查字体/字号/加粗，行距/段间距未生效 | **v5.2 强制**：`compute_coverage()` 同时比对 **行距规则与值**、**段前段后距**；五项全部达标才判全面通过 | （内部逻辑，不暴露给用户） |
 | Celery Worker 宕机 | 任务 Pending 超 5 分钟 | `soft_time_limit=240`，超时置为 `failed` | "任务超时，请稍后重试" |
 | API 配额耗尽 | 返回 429/400 | 捕获后直接置 `failed`，记录 `cost_usd` | "LLM 服务配额不足，请联系管理员" |
-| 校验重试耗尽 | 3 次重试后覆盖率 < 98% | 置 `failed`，保留最后一次修改结果供下载 | "排版校验未通过，可下载当前结果" |
+| 校验重试耗尽 | 3 次增量修补后覆盖率 < 98% | 置 `failed`，保留最后一次修改结果供下载 | "排版校验未通过，可下载当前结果" |
+| **内存备份进程崩溃** | Worker 被 kill -9 时备份仅存内存 | **v5.2 强制**：`backup_doc()` 先将备份写入 MinIO（`backup_object_key`），再开始修改；本地同时保留内存副本供快速回滚 | （无提示，容错层面自动恢复） |
 
 ---
 
@@ -703,7 +779,7 @@ DocAgent/
 │   ├── agents/
 │   │   ├── state.py             # DocAgentState（见 6.1）
 │   │   ├── graph.py             # LangGraph 状态机（含重试闭环）
-│   │   └── nodes/               # supervisor / rag / planner / executor / validator
+│   │   └── nodes/               # supervisor / rag / planner / entry_guard / executor / validator
 │   ├── services/
 │   │   ├── storage.py           # MinIO 上传/备份/预签名
 │   │   ├── rag.py               # ChromaDB + BM25 + RRF

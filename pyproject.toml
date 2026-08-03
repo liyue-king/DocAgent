@@ -3,6 +3,28 @@ name = "docagent"
 version = "0.1.0"
 requires-python = ">=3.13"
 dependencies = [
+    "chromadb-client>=1.5.9",
+    "cryptography>=50.0.0",
     "fastapi>=0.141.1",
+    "jieba",
+    "langgraph>=1.2.10",
+    "minio>=7.2.20",
+    "pydantic-settings>=2.14.2",
+    "pymysql>=1.2.0",
+    "python-docx>=1.2.0",
+    "rank-bm25>=0.2.2",
+    "scikit-learn>=1.9.0",
+    "sentence-transformers>=5.6.1",
+    "sqlalchemy>=2.0.51",
     "uvicorn>=0.52.0",
 ]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.16.1",
+]
+
+[tool.ruff.lint]
+# DTZ005：datetime.now() 无时区 —— 有意设计，与 MySQL CURRENT_TIMESTAMP 的本地时间对齐
+# BLE001：宽泛 except —— 智能体编排层的容错设计，基础设施未就绪时降级而非中断
+ignore = ["DTZ005", "BLE001"]
