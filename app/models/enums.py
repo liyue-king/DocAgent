@@ -23,20 +23,20 @@ import enum  # 导入标准库枚举模块
 class TaskStatus(str, enum.Enum):
     """任务状态（9 个值，对齐 tasks.status ENUM 与三端状态映射）。"""
 
-    PENDING = "pending"        # 已提交，等待 Worker 处理
+    PENDING = "pending"  # 已提交，等待 Worker 处理
     RETRIEVING = "retrieving"  # RAG 模板检索中
-    PLANNING = "planning"      # Planner 生成原子指令中
-    EXECUTING = "executing"    # Executor 执行文档修改中
+    PLANNING = "planning"  # Planner 生成原子指令中
+    EXECUTING = "executing"  # Executor 执行文档修改中
     VALIDATING = "validating"  # Validator 校验样式覆盖率中
-    RETRYING = "retrying"      # 校验未通过，重规划中（前端黄色闪烁）
-    SUCCESS = "success"        # 处理成功（可下载）
-    FAILED = "failed"          # 处理失败
-    EXPIRED = "expired"        # 已过期（24h 生命周期结束）
+    RETRYING = "retrying"  # 校验未通过，重规划中（前端黄色闪烁）
+    SUCCESS = "success"  # 处理成功（可下载）
+    FAILED = "failed"  # 处理失败
+    EXPIRED = "expired"  # 已过期（24h 生命周期结束）
 
 
 class LogLevel(str, enum.Enum):
     """Agent 日志级别（对齐 agent_logs.log_level ENUM）。"""
 
-    INFO = "INFO"      # 常规步骤日志
+    INFO = "INFO"  # 常规步骤日志
     WARNING = "WARNING"  # 警告（如匹配度一般、校验未满 100%）
-    ERROR = "ERROR"    # 错误（任务失败时的详情）
+    ERROR = "ERROR"  # 错误（任务失败时的详情）

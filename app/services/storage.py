@@ -21,8 +21,10 @@
 
 from __future__ import annotations
 
+import functools  # 异常转译装饰器（wraps 保留签名）
 import io  # 内存缓冲（upload_bytes 用）
 import logging  # 标准库日志
+from datetime import timedelta  # 预签名有效期（minio 7.2+ 要求 timedelta）
 from typing import Any  # 泛型类型
 
 from app.config import settings  # MinIO 连接配置
@@ -32,6 +34,25 @@ logger = logging.getLogger(__name__)  # 模块级日志器
 
 class StorageUnavailable(Exception):
     """MinIO 不可用时抛出的异常（调用方捕获后走降级策略）。"""
+
+
+def _unavailable(method: Any) -> Any:
+    """把 minio 客户端的连接/IO 异常统一转译为 StorageUnavailable。
+
+    已缓存的客户端在 MinIO 宕机后抛 urllib3.MaxRetryError 等非 StorageUnavailable
+    异常，不转译会让调用方的 except StorageUnavailable 接不住（500）。
+    """
+
+    @functools.wraps(method)
+    def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
+        try:
+            return method(self, *args, **kwargs)
+        except StorageUnavailable:  # 已有语义异常 → 原样透传
+            raise
+        except Exception as exc:  # 其余（连接拒绝/超时/IO）→ 统一转译
+            raise StorageUnavailable(f"MinIO 操作失败: {exc}") from exc
+
+    return wrapper
 
 
 class MinioStorage:
@@ -58,11 +79,24 @@ class MinioStorage:
             raise StorageUnavailable(f"minio 客户端未安装: {exc}") from exc
 
         try:
+            # minio 7.2+ 无 timeout 参数，须经 http_client（urllib3）注入：
+            # 默认 5 分钟超时 + 5 次连接重试会让停机请求挂死线程 17s+，
+            # 5s 超时 + 0 重试确保快速失败降级（重试交由上层任务层策略）
+            import urllib3  # 延迟导入（HTTP 连接池）
+
+            http_client = urllib3.PoolManager(
+                timeout=urllib3.Timeout(
+                    connect=settings.minio_connect_timeout_seconds,
+                    read=settings.minio_read_timeout_seconds,
+                ),
+                retries=settings.minio_connect_retries,
+            )
             client = Minio(
                 settings.minio_endpoint,  # host:port（如 localhost:9000）
                 access_key=settings.minio_access_key,  # 访问密钥
                 secret_key=settings.minio_secret_key,  # 密钥
                 secure=settings.minio_secure,  # 是否 HTTPS（本地 false）
+                http_client=http_client,
             )
             # 探测连通性：列出桶名（会真实访问一次 MinIO）
             client.list_buckets()
@@ -73,6 +107,7 @@ class MinioStorage:
         self._connected = True
         return client
 
+    @_unavailable
     def ensure_bucket(self, bucket: str | None = None) -> None:
         """确保指定桶存在（不存在则创建）。
 
@@ -84,9 +119,21 @@ class MinioStorage:
         if not client.bucket_exists(bucket):
             client.make_bucket(bucket)
 
+    def ping(self) -> bool:
+        """连通性探测（健康检查用）：连接成功返回 True，失败返回 False。
+
+        :return: MinIO 是否可用
+        """
+        try:
+            self._get_client()  # 内部完成连接 + 列桶探测
+            return True
+        except Exception:  # 连接失败 / 认证失败等
+            return False
+
     # ------------------------------------------------------------------
     # 上传 / 下载
     # ------------------------------------------------------------------
+    @_unavailable
     def upload_bytes(
         self, data: bytes, bucket: str | None = None, key: str = ""
     ) -> str:
@@ -110,6 +157,7 @@ class MinioStorage:
         )
         return key
 
+    @_unavailable
     def upload_file(
         self, file_path: str, bucket: str | None = None, key: str = ""
     ) -> str:
@@ -127,6 +175,7 @@ class MinioStorage:
         client.fput_object(bucket, key, file_path)
         return key
 
+    @_unavailable
     def download_file(
         self, key: str, bucket: str | None = None, local_path: str = ""
     ) -> None:
@@ -144,8 +193,12 @@ class MinioStorage:
     # ------------------------------------------------------------------
     # 预签名 URL / 删除
     # ------------------------------------------------------------------
+    @_unavailable
     def presign_url(
-        self, key: str, bucket: str | None = None, expires_seconds: int = 300
+        self,
+        key: str,
+        bucket: str | None = None,
+        expires_seconds: int | None = None,
     ) -> str:
         """生成限时下载链接（默认 5 分钟，防防盗链）。
 
@@ -157,8 +210,12 @@ class MinioStorage:
         """
         client = self._get_client()
         bucket = bucket or settings.minio_output_bucket
-        return client.presigned_get_object(bucket, key, expires=expires_seconds)
+        expires_seconds = expires_seconds or settings.minio_presign_expires_seconds
+        return client.presigned_get_object(
+            bucket, key, expires=timedelta(seconds=expires_seconds)
+        )
 
+    @_unavailable
     def delete_object(self, key: str, bucket: str | None = None) -> None:
         """删除指定对象（过期清理用）。
 

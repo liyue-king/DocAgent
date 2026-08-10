@@ -53,15 +53,16 @@ def create_task(
     """
     now = datetime.now()  # 当前时间（计算默认过期时间）
     task = Task(  # 构造任务对象
-        id=task_id,                    # 任务 ID
-        user_id=user_id,               # 所属用户
-        template_id=template_id,       # 关联模板（可空）
-        prompt_text=prompt_text,       # 需求文本
+        id=task_id,  # 任务 ID
+        user_id=user_id,  # 所属用户
+        template_id=template_id,  # 关联模板（可空）
+        prompt_text=prompt_text,  # 需求文本
         input_file_name=input_file_name,  # 文件名
         input_file_hash=input_file_hash,  # 文件哈希
         input_file_path=input_file_path,  # 输入路径
-        status=TaskStatus.PENDING,     # 初始状态：待处理
-        expires_at=expires_at or (now + timedelta(hours=settings.task_expire_hours)),  # 过期时间（默认 24h）
+        status=TaskStatus.PENDING,  # 初始状态：待处理
+        expires_at=expires_at
+        or (now + timedelta(hours=settings.task_expire_hours)),  # 过期时间（默认 24h）
     )
     db.add(task)  # 加入会话
     db.commit()  # 提交事务
@@ -101,7 +102,11 @@ def update_task(db: Session, task_id: str, **fields: Any) -> Task | None:
 
 
 def set_running(
-    db: Session, task_id: str, status: TaskStatus, progress: int, step: str | None = None
+    db: Session,
+    task_id: str,
+    status: TaskStatus,
+    progress: int,
+    step: str | None = None,
 ) -> Task | None:
     """推进状态机（retrieving/planning/executing/validating 阶段通用）。
 
@@ -112,7 +117,9 @@ def set_running(
     :param step: 当前步骤描述
     :return: 更新后的任务
     """
-    return update_task(db, task_id, status=status, progress=progress, current_step=step)  # 委托通用更新
+    return update_task(
+        db, task_id, status=status, progress=progress, current_step=step
+    )  # 委托通用更新
 
 
 def mark_started(db: Session, task_id: str) -> Task | None:
@@ -147,13 +154,13 @@ def mark_success(
     return update_task(  # 委托通用更新
         db,
         task_id,
-        status=TaskStatus.SUCCESS,      # 状态 -> 成功
-        progress=100,                   # 进度 -> 100%
+        status=TaskStatus.SUCCESS,  # 状态 -> 成功
+        progress=100,  # 进度 -> 100%
         output_file_path=output_file_path,  # 回填输出路径
-        completed_at=datetime.now(),    # 记录完成时间
+        completed_at=datetime.now(),  # 记录完成时间
         processing_time_ms=processing_time_ms,  # 记录耗时
-        llm_total_tokens=llm_total_tokens,      # 记录 token
-        cost_usd=cost_usd,                      # 记录费用
+        llm_total_tokens=llm_total_tokens,  # 记录 token
+        cost_usd=cost_usd,  # 记录费用
     )
 
 
@@ -164,7 +171,9 @@ def mark_failed(db: Session, task_id: str) -> Task | None:
     :param task_id: 任务 UUID
     :return: 更新后的任务
     """
-    return update_task(db, task_id, status=TaskStatus.FAILED, completed_at=datetime.now())  # 状态->失败+完成时间
+    return update_task(
+        db, task_id, status=TaskStatus.FAILED, completed_at=datetime.now()
+    )  # 状态->失败+完成时间
 
 
 def mark_expired(db: Session, task_id: str) -> Task | None:
@@ -189,7 +198,30 @@ def list_expired_tasks(db: Session, now: datetime | None = None) -> list[Task]:
         db.query(Task)
         .filter(
             Task.expires_at < now,  # 已过过期时间
-            Task.status.notin_([TaskStatus.SUCCESS, TaskStatus.FAILED, TaskStatus.EXPIRED]),  # 且非终态
+            Task.status.notin_(
+                [TaskStatus.SUCCESS, TaskStatus.FAILED, TaskStatus.EXPIRED]
+            ),  # 且非终态
         )
+        .all()
+    )
+
+
+def list_tasks_by_user(
+    db: Session, user_id: int, limit: int = 50, offset: int = 0
+) -> list[Task]:
+    """查询用户最近任务（新→旧，走 idx_user_status 索引）。
+
+    :param db: 数据库会话
+    :param user_id: 用户主键
+    :param limit: 每页条数（默认 50）
+    :param offset: 偏移量（分页）
+    :return: 任务列表
+    """
+    return (
+        db.query(Task)
+        .filter(Task.user_id == user_id)
+        .order_by(Task.created_at.desc())
+        .limit(limit)
+        .offset(offset)
         .all()
     )

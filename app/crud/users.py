@@ -60,6 +60,46 @@ def get_by_email(db: Session, email: str) -> User | None:
     return db.query(User).filter(User.email == email).first()  # 条件查询取第一条
 
 
+def create_user(
+    db: Session, email: str, password_hash: str, credits_balance: int = 10
+) -> User:
+    """注册新用户（邮箱唯一，冲突抛 IntegrityError）。
+
+    :param db: 数据库会话
+    :param email: 用户邮箱（唯一索引）
+    :param password_hash: 密码哈希（security.hash_password 生成）
+    :param credits_balance: 初始额度，默认 10 次（免费版）
+    :return: 创建后的用户
+    :raises IntegrityError: 邮箱已存在（调用方捕获转业务错误）
+    """
+    user = User(
+        email=email,
+        password_hash=password_hash,
+        credits_balance=credits_balance,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+def add_credits(db: Session, user_id: int, amount: int) -> User | None:
+    """给用户增加积分（支付成功到账）。
+
+    :param db: 数据库会话
+    :param user_id: 用户主键
+    :param amount: 增加额度（次）
+    :return: 更新后的用户；用户不存在返回 None
+    """
+    user = db.get(User, user_id)
+    if user is None:
+        return None
+    user.credits_balance += amount  # 余额累加
+    db.commit()
+    db.refresh(user)
+    return user
+
+
 def deduct_credit(db: Session, user_id: int, amount: int = 1) -> bool:
     """扣减用户积分（P1 计费预留）。
 

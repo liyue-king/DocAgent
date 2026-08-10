@@ -30,7 +30,6 @@ warnings.filterwarnings("ignore", category=UserWarning)  # 抑制 huggingface �
 
 import chromadb  # 向量库客户端（HTTP 模式连接容器）
 from rank_bm25 import BM25Okapi  # BM25 关键词检索算法
-from sentence_transformers import SentenceTransformer  # BGE-M3 embedding 模型
 
 # ---- jieba 分词（不可用时自动降级为字符级 n-gram） ----
 try:
@@ -79,8 +78,10 @@ class HybridRetriever:
         self.chroma_client = chromadb.HttpClient(host=chroma_host, port=chroma_port)
         self.collection = self.chroma_client.get_or_create_collection(collection_name)
 
-        # 加载 BGE-M3 embedding 模型（首次会自动下载 ~2GB）
-        self.embedding = SentenceTransformer("BAAI/bge-m3")
+        # 加载 BGE-M3 embedding 模型（进程内共享单例，首次自动下载 ~2GB）
+        from app.services.embeddings import get_embedder
+
+        self.embedding = get_embedder()
 
         # 加载种子模板 JSON 作为 BM25 语料
         if seed_path is None:
@@ -105,7 +106,9 @@ class HybridRetriever:
                   "bm25_rank", "rrf_score", "confidence", "confidence_level"}
         """
         # ----- 第一路：向量语义检索 -----
-        query_vec = self.embedding.encode(prompt).tolist()  # BGE-M3 向量化
+        query_vec = self.embedding.encode(
+            prompt, normalize_embeddings=True
+        ).tolist()  # BGE-M3 向量化（归一化，配合 cosine 空间）
         vec_result = self.collection.query(
             query_embeddings=[query_vec],
             n_results=min(top_k, self.collection.count()),  # 不超过总量

@@ -52,16 +52,22 @@ class Template(Base):
     # 模板语义描述（供 RAG 检索匹配）
     description: Mapped[str] = mapped_column(Text, nullable=False)
     # 样式配置 JSON（paragraph_styles 等，见蓝图 5.1 范例）
-    config: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, comment="样式配置JSON")
+    config: Mapped[dict[str, Any]] = mapped_column(
+        JSON, nullable=False, comment="样式配置JSON"
+    )
     # ChromaDB 向量文档 ID（tmpl_001，与向量库对齐）
-    vector_id: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="ChromaDB向量ID")
+    vector_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="ChromaDB向量ID"
+    )
     # 是否系统内置模板（内置模板不可删除）
     is_system: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     # 命中使用次数（RAG 统计用）
     usage_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     # 创建时间：毫秒精度
     created_at: Mapped[datetime] = mapped_column(
-        DATETIME(fsp=3), default=datetime.now, server_default=text("CURRENT_TIMESTAMP(3)")
+        DATETIME(fsp=3),
+        default=datetime.now,
+        server_default=text("CURRENT_TIMESTAMP(3)"),
     )
 
     # 关系：一个模板被多个任务使用（反向导航 template.tasks）

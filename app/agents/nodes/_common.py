@@ -90,6 +90,20 @@ def _persist(
             fields.update(extra_fields)  # 扩展字段（update_task 内部有列白名单）
             if fields:
                 update_task(db, task_id, **fields)
+            # 写穿 Redis 缓存（db=2，蓝图 5.2；task_cache 内部自吞异常，
+            # 且处于本函数外层 try/except 内，Redis 故障绝不中断主流程）
+            from app.services.task_cache import push_log, set_snapshot  # 延迟导入
+
+            push_log(task_id, message)  # 日志 List（最近 20 条）
+            snap: dict[str, Any] = {}  # 快照三键（仅写非空字段）
+            if status is not None:
+                snap["status"] = status.value  # 枚举 → 字符串值
+            if progress is not None:
+                snap["progress"] = progress
+            if step is not None:
+                snap["step"] = step
+            if snap:
+                set_snapshot(task_id, **snap)
         finally:
             db.close()
     except Exception as exc:  # 数据库未就绪 / 表缺失等：降级为控制台日志

@@ -61,7 +61,9 @@ class AgentLog(Base):
     agent_node: Mapped[str] = mapped_column(String(30), nullable=False)
     # 日志级别：INFO/WARNING/ERROR（存枚举值，对齐蓝图 DDL）
     log_level: Mapped[LogLevel] = mapped_column(
-        SAEnum(LogLevel, values_callable=lambda e: [m.value for m in e], name="log_level"),
+        SAEnum(
+            LogLevel, values_callable=lambda e: [m.value for m in e], name="log_level"
+        ),
         default=LogLevel.INFO,
         server_default="INFO",
     )
@@ -69,16 +71,16 @@ class AgentLog(Base):
     log_message: Mapped[str] = mapped_column(Text, nullable=False)
     # 创建时间：毫秒精度
     created_at: Mapped[datetime] = mapped_column(
-        DATETIME(fsp=3), default=datetime.now, server_default=text("CURRENT_TIMESTAMP(3)")
+        DATETIME(fsp=3),
+        default=datetime.now,
+        server_default=text("CURRENT_TIMESTAMP(3)"),
     )
 
     # 关系：多对一，日志 -> 任务
     task: Mapped[Task] = relationship(back_populates="logs")
 
     # 索引：按 (task_id, created_at) 查询最近日志
-    __table_args__ = (
-        Index("idx_task_id_created", "task_id", "created_at"),
-    )
+    __table_args__ = (Index("idx_task_id_created", "task_id", "created_at"),)
 
     def __repr__(self) -> str:  # pragma: no cover
         """调试友好的对象描述。"""

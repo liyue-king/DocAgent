@@ -1,6 +1,6 @@
 """
 ====================================================================
-文件用途：LLM 客户端（DeepSeek / OpenAI 兼容 Chat Completions）
+文件用途：LLM 客户端（DeepSeek / OpenAI / 千问 Qwen，OpenAI 兼容 Chat Completions）
 ====================================================================
 作用：
     供 Planner 的 LLM 增量路径调用，输出结构化 JSON 原子指令。
@@ -42,7 +42,11 @@ def _resolve_config() -> tuple[str, str, str]:
     :raises LlmUnavailable: provider 未配置或对应 Key 为空
     """
     provider = (settings.llm_provider or "deepseek").lower()
-    if provider == "openai":
+    if provider == "qwen":  # 千问（阿里云百炼 / DashScope）
+        api_key = settings.qwen_api_key
+        base_url = settings.qwen_base_url
+        model = settings.llm_model or "qwen3.7-max"
+    elif provider == "openai":
         api_key = settings.openai_api_key
         base_url = settings.openai_base_url
         model = settings.llm_model or "gpt-4o-mini"
@@ -125,6 +129,58 @@ def chat_json(
         except Exception as exc:  # 网络 / 状态码 / JSON 解析失败均重试
             last_err = exc
             logger.warning("LLM 调用失败（第 %d 次）: %s", attempt + 1, exc)
+            if attempt < max_retries:
+                continue
+    raise LlmUnavailable(f"LLM 多次调用失败: {last_err}") from last_err
+
+
+def chat_text(
+    system_prompt: str,
+    user_prompt: str,
+    temperature: float = 0.3,
+    max_retries: int = 1,
+    timeout: float = 60.0,
+) -> dict[str, Any]:
+    """调用 LLM 返回自由文本（聊天机器人用，不做 JSON 解析）。
+
+    :param system_prompt: 系统提示词（角色设定 + 回答规范）
+    :param user_prompt: 用户消息（含 RAG 检索到的参考资料）
+    :param temperature: 采样温度（聊天 0.3，兼顾稳定与自然）
+    :param max_retries: 失败重试次数
+    :param timeout: 单次请求超时（秒）
+    :return: {"content": str, "total_tokens": int, "model": str}
+    :raises LlmUnavailable: 多次重试仍失败
+    """
+    api_key, base_url, model = _resolve_config()
+    url = f"{base_url.rstrip('/')}/chat/completions"  # POST 端点
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": temperature,
+        "stream": False,
+    }
+
+    last_err: Exception | None = None
+    for attempt in range(max_retries + 1):  # 首次 + max_retries 次重试
+        try:
+            with httpx.Client(timeout=timeout) as client:
+                resp = client.post(url, headers=headers, json=payload)
+            resp.raise_for_status()  # 非 2xx 抛异常
+            body = resp.json()
+            content = body["choices"][0]["message"]["content"]  # LLM 文本
+            usage = body.get("usage", {})  # token 统计
+            return {
+                "content": content,
+                "total_tokens": int(usage.get("total_tokens", 0)),
+                "model": model,
+            }
+        except Exception as exc:  # 网络 / 状态码异常均重试
+            last_err = exc
+            logger.warning("LLM 聊天调用失败（第 %d 次）: %s", attempt + 1, exc)
             if attempt < max_retries:
                 continue
     raise LlmUnavailable(f"LLM 多次调用失败: {last_err}") from last_err

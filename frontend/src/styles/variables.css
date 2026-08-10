@@ -1,0 +1,289 @@
+:root {
+  /* 背景 - 玻璃拟态风格使用渐变底图 */
+  --bg-primary: #F0F4F8;
+  --bg-secondary: #E8EEF5;
+  --bg-mesh-1: #EEF2FF;
+  --bg-mesh-2: #F0FDFA;
+  --bg-mesh-3: #FAF5FF;
+
+  /* 玻璃面板 - 透明玻璃质感 */
+  --glass-tint: linear-gradient(135deg, rgba(255, 255, 255, 0.30) 0%, rgba(255, 255, 255, 0.20) 45%, rgba(255, 255, 255, 0.26) 100%);
+  --glass-tint-strong: linear-gradient(135deg, rgba(255, 255, 255, 0.42) 0%, rgba(255, 255, 255, 0.30) 45%, rgba(255, 255, 255, 0.36) 100%);
+  --glass-tint-hover: linear-gradient(135deg, rgba(255, 255, 255, 0.48) 0%, rgba(255, 255, 255, 0.36) 45%, rgba(255, 255, 255, 0.42) 100%);
+  --glass-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.62) 0%, rgba(255, 255, 255, 0.18) 9%, rgba(255, 255, 255, 0.05) 24%, rgba(255, 255, 255, 0) 46%);
+  --glass-surface: var(--glass-sheen), var(--glass-tint);
+  --glass-surface-strong: var(--glass-sheen), var(--glass-tint-strong);
+  --glass-surface-hover: var(--glass-sheen), var(--glass-tint-hover);
+  --glass-bg: var(--glass-tint);
+  --glass-bg-hover: var(--glass-tint-hover);
+  --glass-bg-strong: var(--glass-tint-strong);
+  --glass-border: rgba(255, 255, 255, 0.52);
+  --glass-border-outer: rgba(255, 255, 255, 0.24);
+  --glass-shadow: 0 8px 32px rgba(31, 38, 135, 0.10);
+  --glass-shadow-lg: 0 18px 52px rgba(31, 38, 135, 0.16);
+  --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.55), inset 0 -1px 0 rgba(255, 255, 255, 0.08), inset 1px 0 0 rgba(255, 255, 255, 0.18), inset -1px 0 0 rgba(255, 255, 255, 0.18);
+  --glass-blur: blur(26px) saturate(170%);
+  --glass-blur-md: blur(18px) saturate(165%);
+
+  /* 环境光斑 */
+  --orb-indigo: rgba(129, 140, 248, 0.42);
+  --orb-cyan: rgba(34, 211, 238, 0.34);
+  --orb-emerald: rgba(52, 211, 153, 0.32);
+  --orb-pink: rgba(244, 114, 182, 0.30);
+  --orb-amber: rgba(251, 191, 36, 0.26);
+
+  /* 品牌色 */
+  --brand-500: #6366F1;
+  --brand-600: #4F46E5;
+  --brand-700: #4338CA;
+
+  /* 状态色 */
+  --success-500: #10B981;
+  --warning-500: #F59E0B;
+  --error-500: #EF4444;
+
+  /* 文字 */
+  --text-primary: #1E293B;
+  --text-secondary: #64748B;
+  --text-tertiary: #94A3B8;
+  --text-link: #4F46E5;
+
+  /* 边框 */
+  --border-color: rgba(148, 163, 184, 0.25);
+  --border-focus: #4F46E5;
+
+  /* 阴影 */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 4px 20px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 8px 30px rgba(0, 0, 0, 0.08);
+
+  /* 圆角 */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+
+  /* 间距 */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+  --space-2xl: 48px;
+  --space-3xl: 80px;
+
+  /* 字体 */
+  --font-sans: "PingFang SC", "Microsoft YaHei", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", "Consolas", monospace;
+
+  /* 动效 */
+  --transition-fast: 150ms ease;
+  --transition-base: 200ms ease;
+  --transition-slow: 300ms ease;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  background:
+    radial-gradient(circle at 15% 25%, rgba(99, 102, 241, 0.16) 0%, transparent 36%),
+    radial-gradient(circle at 85% 15%, rgba(34, 211, 238, 0.14) 0%, transparent 32%),
+    radial-gradient(circle at 78% 82%, rgba(244, 114, 182, 0.13) 0%, transparent 34%),
+    radial-gradient(circle at 22% 78%, rgba(52, 211, 153, 0.13) 0%, transparent 32%),
+    linear-gradient(135deg, #E9EEFF 0%, #F7F8FF 36%, #EFFAF7 68%, #FDF0F6 100%);
+  background-attachment: fixed;
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  min-height: 100vh;
+}
+
+#app {
+  min-height: 100vh;
+}
+
+a {
+  color: var(--text-link);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+::selection {
+  background: rgba(99, 102, 241, 0.24);
+}
+
+/* Element Plus 表单控件玻璃化 */
+.el-input__wrapper,
+.el-textarea__inner {
+  background: rgba(255, 255, 255, 0.30) !important;
+  backdrop-filter: blur(14px) saturate(165%);
+  -webkit-backdrop-filter: blur(14px) saturate(165%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55), inset 0 0 0 1px rgba(148, 163, 184, 0.26) !important;
+  border-radius: 12px !important;
+  transition: box-shadow var(--transition-fast), background var(--transition-fast) !important;
+}
+
+.el-input__wrapper.is-focus,
+.el-textarea__inner:focus {
+  background: rgba(255, 255, 255, 0.42) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55), inset 0 0 0 1px var(--brand-500), 0 0 0 4px rgba(99, 102, 241, 0.14) !important;
+}
+
+.el-button--default {
+  background: rgba(255, 255, 255, 0.30) !important;
+  border: 1px solid var(--glass-border) !important;
+  backdrop-filter: blur(12px) saturate(165%);
+  -webkit-backdrop-filter: blur(12px) saturate(165%);
+  box-shadow: var(--glass-highlight) !important;
+  transition: background var(--transition-fast), box-shadow var(--transition-fast), color var(--transition-fast) !important;
+}
+
+.el-button--default:hover {
+  background: rgba(255, 255, 255, 0.46) !important;
+  color: var(--brand-600) !important;
+  box-shadow: var(--glass-shadow), var(--glass-highlight) !important;
+}
+
+.el-button--primary {
+  background: linear-gradient(135deg, #7C7BFF 0%, #5B5BF0 100%) !important;
+  border: none !important;
+  box-shadow: 0 8px 22px rgba(91, 91, 240, 0.30), inset 0 1px 0 rgba(255, 255, 255, 0.35) !important;
+}
+
+.el-button--primary:hover {
+  background: linear-gradient(135deg, #8B8AFF 0%, #6A6AFF 100%) !important;
+  box-shadow: 0 10px 26px rgba(91, 91, 240, 0.36), inset 0 1px 0 rgba(255, 255, 255, 0.38) !important;
+}
+
+/* Element Plus 表格 */
+.el-table {
+  --el-table-bg-color: transparent !important;
+  --el-table-tr-bg-color: transparent !important;
+  --el-table-header-bg-color: rgba(255, 255, 255, 0.22) !important;
+  --el-table-border-color: rgba(255, 255, 255, 0.30) !important;
+  --el-table-row-hover-bg-color: rgba(255, 255, 255, 0.32) !important;
+  --el-table-header-text-color: #374151 !important;
+  background: transparent !important;
+}
+
+.el-table th.el-table__cell {
+  backdrop-filter: blur(12px) saturate(160%);
+  -webkit-backdrop-filter: blur(12px) saturate(160%);
+}
+
+.el-table td.el-table__cell,
+.el-table th.el-table__cell.is-leaf {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.28) !important;
+}
+
+/* Element Plus 下拉 / 气泡 */
+.el-popper.is-light,
+.el-dropdown-menu {
+  background: rgba(255, 255, 255, 0.80) !important;
+  backdrop-filter: blur(22px) saturate(170%);
+  -webkit-backdrop-filter: blur(22px) saturate(170%);
+  border: 1px solid var(--glass-border) !important;
+  box-shadow: var(--glass-shadow-lg), var(--glass-highlight) !important;
+}
+
+.el-dropdown-menu__item:not(.is-disabled):hover {
+  background: rgba(99, 102, 241, 0.10) !important;
+  color: var(--brand-600) !important;
+}
+
+/* Element Plus 折叠面板 / 消息 / 进度 / 骨架屏 */
+.el-collapse {
+  border: none !important;
+}
+
+.el-collapse-item__header {
+  background: transparent !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.30) !important;
+}
+
+.el-collapse-item__wrap {
+  background: transparent !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.18) !important;
+}
+
+.el-message {
+  background: rgba(255, 255, 255, 0.80) !important;
+  backdrop-filter: blur(20px) saturate(170%);
+  -webkit-backdrop-filter: blur(20px) saturate(170%);
+  border: 1px solid var(--glass-border) !important;
+  box-shadow: var(--glass-shadow-lg), var(--glass-highlight) !important;
+}
+
+.el-progress-bar__outer {
+  background: rgba(148, 163, 184, 0.22) !important;
+}
+
+.el-skeleton__item {
+  background: rgba(148, 163, 184, 0.18) !important;
+}
+
+.el-checkbox__inner {
+  background: rgba(255, 255, 255, 0.50) !important;
+  border-color: rgba(148, 163, 184, 0.40) !important;
+}
+
+/* 全局玻璃工具类 */
+.glass {
+  position: relative;
+  background: var(--glass-surface);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow), var(--glass-highlight);
+}
+
+.glass-strong {
+  position: relative;
+  background: var(--glass-surface-strong);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow), var(--glass-highlight);
+}
+
+.glass-dark {
+  position: relative;
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.52) 0%, rgba(15, 23, 42, 0.72) 100%);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: var(--glass-shadow), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+
+.glass-hover {
+  transition: background var(--transition-base), box-shadow var(--transition-base), transform var(--transition-base);
+}
+
+.glass-hover:hover {
+  background: var(--glass-surface-hover);
+  box-shadow: var(--glass-shadow-lg), var(--glass-highlight);
+}
+
+/* 玻璃内联小芯片 */
+.glass-chip {
+  background: rgba(255, 255, 255, 0.32);
+  backdrop-filter: blur(12px) saturate(165%);
+  -webkit-backdrop-filter: blur(12px) saturate(165%);
+  border: 1px solid rgba(255, 255, 255, 0.46);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.50);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

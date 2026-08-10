@@ -35,6 +35,8 @@ from app.db import Base  # ORM 公共基类
 
 if TYPE_CHECKING:
     # 仅用于类型检查/IDE 提示，运行时不会真正导入（避免循环导入）
+    from app.models.knowledge_doc import KnowledgeDoc
+    from app.models.payment import Payment
     from app.models.task import Task
 
 
@@ -50,14 +52,27 @@ class User(Base):
     # 邮箱：唯一索引，可空（P1 登录预留）
     email: Mapped[str | None] = mapped_column(String(100), unique=True, nullable=True)
     # 密码哈希：默认空字符串（P1 启用登录后使用）
-    password_hash: Mapped[str] = mapped_column(String(255), default="", server_default="")
+    password_hash: Mapped[str] = mapped_column(
+        String(255), default="", server_default=""
+    )
     # 积分余额：免费额度 10 次
-    credits_balance: Mapped[int] = mapped_column(Integer, default=10, server_default="10", comment="免费额度10次")
+    credits_balance: Mapped[int] = mapped_column(
+        Integer, default=10, server_default="10", comment="免费额度10次"
+    )
     # 是否启用：软删除/封禁标记
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
+    # 是否管理员：可上传平台知识库（RAG）文档
+    is_admin: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default="0",
+        comment="是否管理员（可维护平台知识库）",
+    )
     # 创建时间：毫秒精度，默认当前时间
     created_at: Mapped[datetime] = mapped_column(
-        DATETIME(fsp=3), default=datetime.now, server_default=text("CURRENT_TIMESTAMP(3)")
+        DATETIME(fsp=3),
+        default=datetime.now,
+        server_default=text("CURRENT_TIMESTAMP(3)"),
     )
     # 更新时间：毫秒精度，更新时自动刷新
     updated_at: Mapped[datetime] = mapped_column(
@@ -69,6 +84,10 @@ class User(Base):
 
     # 关系：一个用户拥有多个任务（反向导航 user.tasks）
     tasks: Mapped[list[Task]] = relationship(back_populates="user")
+    # 关系：一个用户拥有多笔支付订单（反向导航 user.payments）
+    payments: Mapped[list[Payment]] = relationship(back_populates="user")
+    # 关系：一个用户拥有多篇自定义知识库文档（反向导航 user.knowledge_docs）
+    knowledge_docs: Mapped[list[KnowledgeDoc]] = relationship(back_populates="user")
 
     def __repr__(self) -> str:  # pragma: no cover
         """调试友好的对象描述。"""
