@@ -108,7 +108,9 @@
             </ul>
             <div class="knowledge-card__tip-cta">
               <el-icon><ChatDotRound /></el-icon>
-              <router-link to="/chat">去问 AI 助手</router-link>
+              <a class="knowledge-card__tip-link" href="#" @click.prevent="openAiAssistant">
+                去问 AI 助手
+              </a>
             </div>
           </div>
         </div>
@@ -214,6 +216,10 @@ async function loadDocs() {
 }
 
 onMounted(loadAll)
+
+function openAiAssistant() {
+  window.dispatchEvent(new CustomEvent('docagent:open-ai'))
+}
 
 function triggerFile() {
   fileInput.value?.click()
@@ -525,6 +531,10 @@ async function handleDelete(doc) {
 .knowledge-card__tip-cta a {
   color: var(--brand-600);
   text-decoration: none;
+}
+
+.knowledge-card__tip-link {
+  cursor: pointer;
 }
 
 .knowledge-card__tip-cta a:hover {

@@ -9,6 +9,34 @@
           <p class="upload-page__desc">支持 .docx 格式，最大 20MB</p>
         </div>
 
+        <!-- 模板选择提示 -->
+        <div class="template-hint">
+          <div class="template-hint__head">
+            <div class="template-hint__title">
+              <el-icon><MagicStick /></el-icon>
+              <span>选择排版模板（可选，推荐先选模板）</span>
+            </div>
+            <span class="template-hint__count">{{ templates.length }} 个模板</span>
+          </div>
+          <p class="template-hint__desc">
+            选择后会自动填入排版要求；不知道选什么？点
+            <a class="template-hint__ai" href="#" @click.prevent="openAiAssistant">AI 助手</a>
+            帮你推荐
+          </p>
+          <div class="template-hint__list">
+            <button
+              v-for="tpl in templates"
+              :key="tpl.name"
+              class="template-hint__item"
+              :class="{ 'template-hint__item--active': selectedTemplate === tpl.name }"
+              @click="selectTemplate(tpl)"
+            >
+              <span class="template-hint__item-name">{{ tpl.name }}</span>
+              <span class="template-hint__item-desc">{{ tpl.description }}</span>
+            </button>
+          </div>
+        </div>
+
         <!-- 上传卡片 -->
         <div class="upload-card">
           <div
@@ -102,10 +130,11 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Upload, Document, Close, Lock } from '@element-plus/icons-vue'
+import { Close, Document, Lock, MagicStick, Upload } from '@element-plus/icons-vue'
 import AppNavbar from '@/components/AppNavbar.vue'
 import AppFooter from '@/components/AppFooter.vue'
 import { processDocument } from '@/api/tasks.js'
+import { getTemplates } from '@/api/templates.js'
 
 const router = useRouter()
 const route = useRoute()
@@ -115,6 +144,8 @@ const selectedFile = ref(null)
 const prompt = ref('')
 const isDragOver = ref(false)
 const submitting = ref(false)
+const templates = ref([])
+const selectedTemplate = ref('')
 
 const quickTags = [
   { label: '学术论文', text: '按本科毕业论文格式排版，标题黑体三号，正文宋体小四，1.5倍行距' },
@@ -123,12 +154,49 @@ const quickTags = [
   { label: '简历', text: '将内容整理成简洁专业的简历格式，统一字体和间距' },
 ]
 
+const fallbackTemplates = [
+  { name: '学术论文', description: '标题黑体三号，正文宋体小四，1.5 倍行距，适合毕业论文' },
+  { name: '商务报告', description: '简洁专业，统一标题层级与段落间距，适合企业汇报' },
+  { name: '政府公文', description: '方正小标宋二号标题，仿宋三号正文，行距 28 磅' },
+  { name: '个人简历', description: '清晰简洁，突出重点信息，适合求职简历' },
+  { name: '合同协议', description: '条款清晰、自动编号缩进，适合法律文书' },
+  { name: '通用文档', description: '标准宋体黑体组合，适合日常办公文档' },
+]
+
 onMounted(() => {
   const tpl = route.query.template
   if (tpl) {
+    selectedTemplate.value = tpl
     prompt.value = `请按「${tpl}」模板进行排版`
   }
+  loadTemplates()
 })
+
+async function loadTemplates() {
+  try {
+    const data = await getTemplates()
+    const list = data.templates || []
+    if (list.length) {
+      templates.value = list.map((t) => ({
+        name: t.name,
+        description: t.description || '官方排版模板',
+      }))
+      return
+    }
+  } catch {
+    // 后端不可用时使用静态模板提示
+  }
+  templates.value = fallbackTemplates
+}
+
+function selectTemplate(tpl) {
+  selectedTemplate.value = tpl.name
+  prompt.value = `请按「${tpl.name}」模板进行排版：${tpl.description || ''}`
+}
+
+function openAiAssistant() {
+  window.dispatchEvent(new CustomEvent('docagent:open-ai'))
+}
 
 const canSubmit = computed(() => selectedFile.value && prompt.value.trim())
 
@@ -205,6 +273,105 @@ async function handleSubmit() {
 .upload-page__header {
   text-align: center;
   margin-bottom: 40px;
+}
+
+.template-hint {
+  background: var(--glass-surface);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--glass-shadow), var(--glass-highlight);
+  padding: 20px 24px;
+  margin-bottom: 20px;
+}
+
+.template-hint__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.template-hint__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.template-hint__title .el-icon {
+  color: var(--brand-600);
+}
+
+.template-hint__count {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.template-hint__desc {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 0 0 14px;
+}
+
+.template-hint__ai {
+  color: var(--text-link);
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.template-hint__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.template-hint__item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 14px;
+  background: rgba(255, 255, 255, 0.30);
+  backdrop-filter: blur(10px) saturate(165%);
+  -webkit-backdrop-filter: blur(10px) saturate(165%);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  text-align: left;
+  max-width: 240px;
+  transition: all var(--transition-fast);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.40);
+}
+
+.template-hint__item:hover {
+  border-color: var(--brand-400);
+  background: rgba(99, 102, 241, 0.10);
+}
+
+.template-hint__item--active {
+  border-color: var(--brand-500);
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.16), rgba(255, 255, 255, 0.34));
+  box-shadow: 0 0 0 1px var(--brand-500), var(--glass-shadow), var(--glass-highlight);
+}
+
+.template-hint__item-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.template-hint__item-desc {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-tertiary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .upload-page__title {

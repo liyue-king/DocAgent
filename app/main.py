@@ -16,11 +16,15 @@
 
 from __future__ import annotations
 
-from fastapi import FastAPI, Request  # Web 框架
+from typing import Annotated  # 依赖注入标注
+
+from fastapi import Depends, FastAPI, Request  # Web 框架
 from fastapi.middleware.cors import CORSMiddleware  # 跨域中间件
-from fastapi.responses import JSONResponse  # 认证异常响应
+from fastapi.responses import JSONResponse, PlainTextResponse  # 异常/指标响应
+from sqlalchemy.orm import Session  # 指标端点会话类型
 
 from app.api.auth import router as auth_router  # 认证路由（/api/v1/auth/*）
+from app.api.admin import router as admin_router  # 管理员路由（/api/v1/admin/*）
 from app.api.chat import (  # 聊天/知识库路由（/api/v1/chat、/api/v1/rag/*）
     router as chat_router,
 )
@@ -33,7 +37,12 @@ from app.api.templates import (  # 模板路由（/api/v1/templates/*）
     router as templates_router,
 )
 from app.config import settings  # 应用配置（CORS 等）
+from app.db import get_db  # 指标聚合会话
+from app.logging_setup import setup_logging  # loguru 统一日志
+from app.services import metrics  # Prometheus 指标
 from app.services.security import AuthError  # 认证异常
+
+setup_logging()  # 日志先行：后续 import 的模块日志统一走 loguru
 
 # FastAPI 应用实例（uvicorn 入口：app.main:app）
 app = FastAPI(
@@ -54,6 +63,7 @@ app.add_middleware(
 )
 
 app.include_router(auth_router)  # 注册 /api/v1/auth/*
+app.include_router(admin_router)  # 注册 /api/v1/admin/*
 app.include_router(chat_router)  # 注册 /api/v1/chat + /api/v1/rag/*
 app.include_router(knowledge_router)  # 注册 /api/v1/knowledge/*
 app.include_router(pay_router)  # 注册 /api/v1/pay/*
@@ -77,6 +87,21 @@ mcp = FastApiMCP(
     exclude_operations=_MCP_EXCLUDE_OPERATIONS,
 )
 mcp.mount_http()  # 挂载到自身 app，路径 /mcp（Streamable HTTP transport）
+
+
+@app.get("/metrics", include_in_schema=False)
+def metrics_endpoint(
+    db: Annotated[Session, Depends(get_db)] = None,
+) -> PlainTextResponse:
+    """Prometheus 指标（无认证，供抓取器轮询）。"""
+    try:
+        text = metrics.metrics_text(db)
+    except Exception:  # 数据库短暂不可用 → 503（Prometheus 标记抓取失败）
+        db.rollback()
+        return PlainTextResponse(
+            "# docagent_metrics unavailable: database down\n", status_code=503
+        )
+    return PlainTextResponse(text, media_type="text/plain; version=0.0.4")
 
 
 @app.exception_handler(AuthError)

@@ -38,6 +38,7 @@ _PROGRESS_KEY = "docagent:task:{tid}:progress"  # 进度（0-100）
 _STEP_KEY = "docagent:task:{tid}:step"  # 当前步骤描述
 _LOGS_KEY = "docagent:task:{tid}:logs"  # 最近日志（List）
 _RATELIMIT_KEY = "docagent:ratelimit:{ip}"  # IP 限流计数
+_CANCEL_KEY = "docagent:task:{tid}:cancelled"  # 取消标志位（Worker 协作退出）
 
 _SNAPSHOT_TTL = settings.redis_snapshot_ttl_seconds  # 快照 Key 生存时间（秒）
 _LOGS_MAX = settings.redis_logs_max  # 缓存日志条数上限（与轮询响应一致）
@@ -183,6 +184,36 @@ def backfill(
         pipe.execute()
     except Exception as exc:
         logger.warning("[task_cache] 快照回填失败: %s", exc)
+
+
+def set_cancelled_flag(task_id: str) -> None:
+    """写取消标志位（TTL 3600s），Worker 节点入口轮询感知。
+
+    :param task_id: 任务 UUID
+    """
+    client = get_client()
+    if client is None:
+        return  # Redis 不可用 → 依赖 MySQL 状态判定
+    try:
+        client.set(_CANCEL_KEY.format(tid=task_id), "1", ex=_SNAPSHOT_TTL)
+    except Exception as exc:
+        logger.warning("[task_cache] 取消标志写失败: %s", exc)
+
+
+def get_cancelled_flag(task_id: str) -> bool | None:
+    """读取消标志位。
+
+    :param task_id: 任务 UUID
+    :return: True=已取消；False=未取消；None=Redis 不可用（调用方降级 MySQL）
+    """
+    client = get_client()
+    if client is None:
+        return None
+    try:
+        return client.get(_CANCEL_KEY.format(tid=task_id)) == "1"
+    except Exception as exc:
+        logger.warning("[task_cache] 取消标志读失败: %s", exc)
+        return None
 
 
 def is_rate_limited(ip: str) -> bool:

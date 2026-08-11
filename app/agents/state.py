@@ -11,12 +11,10 @@
     - app/agents/nodes/*.py（各节点读取/更新状态字段）
     - app/agents/graph.py（StateGraph(state_schema)）
 说明（v5.2 序列化安全约束）：
-    - `doc_dom` 含 python-docx 的 para_obj 对象引用，**禁止序列化进
-      Checkpointer**。当前阶段不使用 Checkpointer（Redis db=3 属 P1），
-      状态在 Worker 进程内存中跨节点传递；若后续启用 Checkpointer，仅持久化
-      `doc_dom_serial`（纯 JSON），恢复时由 Executor 从 working_file_path 重建。
-    - `doc_dom_serial` 是可序列化的纯数据 DOM（id/style/text/font/size/bold/
-      行距/段间距），供 Planner 决策与状态快照落库。
+    - 状态**全部可序列化**（docx 对象不放进 state）：Executor 与 Validator 各自
+      从文件路径重建文档对象，Checkpointer（SqliteSaver）可安全持久化全部字段。
+    - `doc_dom_serial` 是纯数据 DOM（id/style/text/font/size/bold/行距/段间距），
+      供 Planner 决策与状态快照落库。
     - 除蓝图字段外，补充了 3 个**内部路由控制字段**（entry_guard_* / started_at_ts），
       仅用于图内条件边路由与耗时统计，不对外暴露。
 ====================================================================
@@ -37,13 +35,10 @@ class DocAgentState(TypedDict):
     selected_template_id: int  # 命中模板主键（Chroma tmpl_xxx 对齐）
     selected_template_config: dict[str, Any]  # 模板 JSON（paragraph_styles）
 
-    # ── 文档解析（注意：para_obj 不可序列化，禁止写入 Checkpointer）──
+    # ── 文档解析（v5.2 序列化安全约束）──
     doc_dom_serial: dict[
         str, Any
-    ]  # 可序列化部分：段落 id/style/text/font/size/bold/行距/段间距
-    doc_dom: (
-        Any | None
-    )  # 完整 DOM（含 para_obj 引用），仅供 Executor/Validator 内存使用，**不入 Checkpointer**
+    ]  # 纯数据 DOM：段落 id/style/text/font/size/bold/行距/段间距（可序列化，入 Checkpointer）
 
     # ── 文件引用（MinIO 备份 + 本地工作副本）──
     input_file_path: str  # MinIO 输入对象 Key

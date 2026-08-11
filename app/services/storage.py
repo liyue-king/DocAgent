@@ -190,6 +190,24 @@ class MinioStorage:
         bucket = bucket or settings.minio_input_bucket
         client.fget_object(bucket, key, local_path)
 
+    @_unavailable
+    def read_object(self, key: str, bucket: str | None = None) -> bytes:
+        """读取对象全部字节（下载接口代理用，避免浏览器直连 MinIO 的跨域/主机名问题）。
+
+        :param key: 对象 Key
+        :param bucket: 桶名，默认输出桶
+        :return: 对象字节内容
+        :raises StorageUnavailable: MinIO 不可用或对象不存在
+        """
+        client = self._get_client()
+        bucket = bucket or settings.minio_output_bucket
+        resp = client.get_object(bucket, key)
+        try:
+            return resp.read()
+        finally:
+            resp.close()
+            resp.release_conn()
+
     # ------------------------------------------------------------------
     # 预签名 URL / 删除
     # ------------------------------------------------------------------

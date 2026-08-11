@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)  # 模块级日志器
 
 
 def _delete_task_objects(task: Any) -> None:
-    """删除过期任务的 MinIO 输入/输出对象（单个失败仅告警，不中断清扫）。
+    """删除过期任务的 MinIO 输入/输出对象与本地兜底文件（单个失败仅告警）。
 
     :param task: tasks 表记录（需含 input_file_path / output_file_path）
     """
@@ -52,6 +52,16 @@ def _delete_task_objects(task: Any) -> None:
             storage.delete_object(key, bucket=bucket)
         except Exception as exc:  # MinIO 宕机 → 对象保留，下次清扫重试
             logger.warning("[worker] 过期对象删除失败: %s", exc)
+    # 本地兜底文件（仅限稳定输出目录内，防误删）
+    local_path = task.output_file_path or ""
+    if local_path and os.path.exists(local_path) and os.path.abspath(
+        local_path
+    ).startswith(os.path.abspath(settings.local_output_dir_abs)):
+        try:
+            os.remove(local_path)
+            logger.info("[worker] 过期本地兜底文件已删除: %s", local_path)
+        except Exception as exc:
+            logger.warning("[worker] 过期本地兜底文件删除失败: %s", exc)
 
 
 def _fail_task(task_id: str, message: str) -> None:
@@ -72,8 +82,9 @@ def _fail_task(task_id: str, message: str) -> None:
                 TaskStatus.SUCCESS,
                 TaskStatus.FAILED,
                 TaskStatus.EXPIRED,
+                TaskStatus.CANCELLED,
             ):
-                return  # 节点已收尾或任务不存在，不覆盖终态
+                return  # 节点已收尾/已取消或任务不存在，不覆盖终态
             mark_failed(db, task_id)
             add_log(
                 db,
@@ -141,14 +152,30 @@ def process_document_task(task_id: str) -> dict[str, Any]:
             "[worker] 任务处理完成: %s status=%s", task_id, final_state.get("status")
         )
 
-        # ---- 3. 清理临时文件（保留本地输出兜底）----
+        # ---- 3. 本地兜底输出转存稳定目录，临时目录一律清理 ----
         final_output = final_state.get("output_file_path", "")
-        if final_output and os.path.exists(
+        if final_output and os.path.exists(final_output) and not os.path.abspath(
             final_output
-        ):  # MinIO 上传失败，本地是唯一副本
-            logger.warning("[worker] 输出仅存本地，保留文件供下载: %s", final_output)
-        else:
-            shutil.rmtree(tmp_dir, ignore_errors=True)  # 正常路径：全量清理
+        ).startswith(os.path.abspath(settings.local_output_dir_abs)):
+            try:
+                from app.crud.tasks import update_task  # 延迟导入
+                from app.db import SessionLocal
+
+                stable_dir = os.path.join(settings.local_output_dir_abs, task_id)
+                os.makedirs(stable_dir, exist_ok=True)
+                stable_path = os.path.join(stable_dir, os.path.basename(final_output))
+                shutil.copy2(final_output, stable_path)
+                db = SessionLocal()
+                try:
+                    update_task(db, task_id, output_file_path=stable_path)
+                finally:
+                    db.close()
+                logger.warning(
+                    "[worker] 输出仅存本地，已转存稳定目录: %s", stable_path
+                )
+            except Exception as exc:
+                logger.warning("[worker] 本地输出转存稳定目录失败: %s", exc)
+        shutil.rmtree(tmp_dir, ignore_errors=True)  # 临时目录全量清理
         return final_state
     except SoftTimeLimitExceeded:  # 软超时 240s（须在 Exception 前捕获）
         _fail_task(task_id, "任务超时，请稍后重试")

@@ -59,14 +59,13 @@
             </el-table-column>
             <el-table-column label="操作" width="160" fixed="right">
               <template #default="{ row }">
-                <el-button
+                <a
                   v-if="row.status === 'success'"
-                  type="primary"
-                  text
-                  @click="downloadTask(row)"
+                  :href="`/api/v1/download/${row.id}`"
+                  class="history-page__download"
                 >
                   下载
-                </el-button>
+                </a>
                 <el-button v-else text @click="viewTask(row)">查看</el-button>
               </template>
             </el-table-column>
@@ -103,7 +102,7 @@ import AppNavbar from '@/components/AppNavbar.vue'
 import AppFooter from '@/components/AppFooter.vue'
 import StatusTag from '@/components/StatusTag.vue'
 import EmptyState from '@/components/EmptyState.vue'
-import { getTaskStatus, getTasks } from '@/api/tasks.js'
+import { getTasks } from '@/api/tasks.js'
 
 const router = useRouter()
 const searchQuery = ref('')
@@ -161,18 +160,6 @@ function viewTask(row) {
   router.push(`/task/${row.id}`)
 }
 
-async function downloadTask(row) {
-  try {
-    const data = await getTaskStatus(row.id)
-    if (!data.download_url) {
-      ElMessage.warning('该任务暂无可下载文件')
-      return
-    }
-    window.open(data.download_url, '_blank')
-  } catch (err) {
-    ElMessage.error(err.message || '下载失败')
-  }
-}
 </script>
 
 <style scoped>
@@ -284,6 +271,18 @@ async function downloadTask(row) {
 
 .history-page__file .el-icon {
   color: var(--brand-500);
+}
+
+.history-page__download {
+  color: var(--brand-600);
+  font-size: 14px;
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.history-page__download:hover {
+  color: var(--brand-700);
+  text-decoration: underline;
 }
 
 @media (max-width: 768px) {

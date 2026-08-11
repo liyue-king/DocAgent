@@ -22,3 +22,7 @@ export function getDownloadUrl(taskId) {
 export function getTasks(params) {
   return callTool('list_my_tasks_api_v1_tasks_get', { ...params })
 }
+
+export function cancelTask(taskId) {
+  return callTool('cancel_task_api_v1_task__task_id__cancel_post', { task_id: taskId })
+}

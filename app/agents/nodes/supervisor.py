@@ -24,7 +24,7 @@ from __future__ import annotations
 import time  # 启动时间戳
 from typing import Any  # 泛型类型
 
-from app.agents.nodes._common import notify  # 日志 + 持久化
+from app.agents.nodes._common import is_cancelled, notify  # 取消判定 / 日志持久化
 from app.models import LogLevel, TaskStatus  # 枚举
 from app.services.docx_parser import build_dom_serial, parse_docx  # DOM 解析
 
@@ -39,6 +39,10 @@ def supervisor_node(state: dict[str, Any]) -> dict[str, Any]:
     """
     working_file = state.get("working_file_path", "")
     started_at = state.get("started_at_ts")
+
+    # ---- 0. 取消检查：已取消 → 提前退出（error_node 收尾，DB 保持 cancelled）----
+    if is_cancelled(state.get("task_id", "")):
+        return {"status": "cancelled", "error_message": "任务已取消"}
 
     # ---- 1. 记录启动时间（仅首次）----
     updates: dict[str, Any] = {}

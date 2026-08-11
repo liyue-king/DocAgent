@@ -9,9 +9,10 @@
       </router-link>
 
       <nav class="navbar__links">
-        <router-link to="/chat">AI 助手</router-link>
         <router-link to="/knowledge">知识库</router-link>
         <router-link v-if="isAdmin" to="/admin/knowledge">平台知识库</router-link>
+        <router-link v-if="isAdmin" to="/admin/users">用户管理</router-link>
+        <router-link v-if="isAdmin" to="/admin/templates">模板管理</router-link>
         <router-link to="/templates">模板</router-link>
         <router-link to="/pricing">定价</router-link>
         <router-link to="/about">关于</router-link>
@@ -19,6 +20,7 @@
 
       <div class="navbar__actions">
         <template v-if="isLoggedIn">
+          <router-link to="/upload" class="navbar__cta">上传文档</router-link>
           <router-link to="/history" class="navbar__link">历史任务</router-link>
           <span class="navbar__divider"></span>
           <el-dropdown>
@@ -34,7 +36,8 @@
                 <el-dropdown-item disabled>
                   余额：{{ user?.credits_balance ?? 0 }} 次
                 </el-dropdown-item>
-                <el-dropdown-item @click="handleLogout">退出登录</el-dropdown-item>
+                <el-dropdown-item @click="router.push('/user-center')">个人中心</el-dropdown-item>
+                <el-dropdown-item divided @click="handleLogout">退出登录</el-dropdown-item>
               </el-dropdown-menu>
             </template>
           </el-dropdown>

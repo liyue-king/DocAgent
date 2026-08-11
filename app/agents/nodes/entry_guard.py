@@ -6,7 +6,8 @@
     逐条校验 task_queue：action 是否在白名单、para_ids 是否非空且不越界、
     必填字段是否齐全。校验失败时的强制兜底（蓝图 9 容错矩阵）：
     - 若 Planner 处于确定性路径 → 自动切换到 LLM 路径重试 1 次（回跳 planner）；
-    - 若已为 LLM 路径 → 硬编码兜底（全部段落 set_font 宋体 + set_font_size 12pt）。
+    - 若已为 LLM 路径 → 保留原格式直通（不再硬编码改动全部段落，
+      避免破坏用户不需要改动的格式；原样输出 + 警告日志）。
 依赖：
     - app.agents.nodes.planner.ACTION_WHITELIST（白名单唯一来源）
     - app.agents.nodes._common（notify）
@@ -120,37 +121,40 @@ def entry_guard_node(state: dict[str, Any]) -> dict[str, Any]:
             }
         )
     else:
-        # 已为 LLM 路径（或已重规划过）→ 硬编码兜底：全部宋体 12pt
-        all_ids = list(range(paragraph_count)) if paragraph_count else []
-        fallback = [
-            {"action": "set_font", "para_ids": all_ids, "font": "宋体"},
-            {"action": "set_font_size", "para_ids": all_ids, "size_pt": 12},
-        ]
+        # 已为 LLM 路径（或已重规划过）→ 保留原格式直通：空队列让 executor
+        # 原样保存输出，不再强制改动全部段落（硬编码全改会破坏用户不需要
+        # 改动的格式）。entry_guard_fallback 标记供前端提示"未做修改"。
         logs = notify(
             state,
-            f"规划输出非法（{detail}），启用硬编码兜底方案（全部宋体 12pt）",
+            f"规划输出非法（{detail}），已保留原格式直通输出（未做任何样式修改）",
             NODE_NAME,
-            level=LogLevel.ERROR,
+            level=LogLevel.WARNING,
             status=TaskStatus.EXECUTING,
             progress=60,
-            step="启用备用排版方案",
+            step="保留原格式",
         )
         updates.update(
             {
                 "agent_logs": logs,
-                "task_queue": fallback,
+                "task_queue": [],  # 空队列 → executor 原样保存
                 "entry_guard_fallback": True,
                 "status": "executing",
-                "error_message": "规划输出非法，已启用硬编码兜底",
+                "error_message": f"规划输出非法，已保留原格式：{detail}",
             }
         )
     return updates
 
 
 def route_after_guard(state: dict[str, Any]) -> str:
-    """EntryGuard 条件路由：executing→executor，planning→回跳 planner。
+    """EntryGuard 条件路由：executing→executor，planning→回跳 planner，
+    cancelled→error_node（用户取消短路，避免回跳 planner 死循环）。
 
     :param state: 当前状态
     :return: 下一节点名
     """
-    return "executor" if state.get("status") == "executing" else "planner"
+    status = state.get("status")
+    if status == "executing":
+        return "executor"
+    if status == "cancelled":
+        return "error_node"
+    return "planner"

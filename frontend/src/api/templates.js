@@ -15,3 +15,20 @@ export async function getTemplate(id) {
 export function recommendTemplates(query, topK = 3) {
   return callTool('recommend_api_v1_templates_recommend_post', { query, top_k: topK })
 }
+
+export function createTemplate(data) {
+  return callTool('create_template_api_v1_templates_post', data)
+}
+
+export function updateTemplate(templateId, data) {
+  return callTool('update_template_api_v1_templates__template_id__put', {
+    template_id: templateId,
+    ...data,
+  })
+}
+
+export function deleteTemplate(templateId) {
+  return callTool('delete_template_api_v1_templates__template_id__delete', {
+    template_id: templateId,
+  })
+}

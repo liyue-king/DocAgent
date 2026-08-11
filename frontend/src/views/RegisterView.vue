@@ -85,9 +85,26 @@
             </el-form-item>
 
             <el-form-item prop="agreed">
-              <el-checkbox v-model="form.agreed">
-                我已阅读并同意<router-link to="#">《用户协议》</router-link>和<router-link to="#">《隐私政策》</router-link>
-              </el-checkbox>
+              <label
+                class="auth-card__option"
+                :class="{ 'auth-card__option--checked': form.agreed }"
+              >
+                <input
+                  v-model="form.agreed"
+                  type="checkbox"
+                  class="auth-card__option-input"
+                  @change="handleAgreedChange"
+                />
+                <span class="auth-card__option-box" aria-hidden="true">
+                  <el-icon v-if="form.agreed" :size="12"><Check /></el-icon>
+                </span>
+                <span class="auth-card__option-text">
+                  我已阅读并同意
+                  <a class="auth-card__agreement" href="#" @click.prevent.stop>《用户协议》</a>
+                  和
+                  <a class="auth-card__agreement" href="#" @click.prevent.stop>《隐私政策》</a>
+                </span>
+              </label>
             </el-form-item>
 
             <el-form-item>
@@ -124,7 +141,7 @@
 import { ref, reactive, computed, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Document, Message, Lock } from '@element-plus/icons-vue'
+import { Check, Document, Lock, Message } from '@element-plus/icons-vue'
 import AppNavbar from '@/components/AppNavbar.vue'
 import AppFooter from '@/components/AppFooter.vue'
 import AnimatedCheck from '@/components/AnimatedCheck.vue'
@@ -235,7 +252,16 @@ function checkStrength() {
   else strength.value = 'strong'
 }
 
+function handleAgreedChange() {
+  // 原生 checkbox 不触发 Element Plus 表单项校验，这里手动触发一次
+  formRef.value?.validateField('agreed').catch(() => {})
+}
+
 async function handleSubmit() {
+  if (!form.agreed) {
+    ElMessage.warning('请先阅读并同意《用户协议》和《隐私政策》')
+    return
+  }
   const valid = await formRef.value?.validate().catch(() => false)
   if (!valid) return
 
@@ -321,6 +347,68 @@ async function handleSubmit() {
   display: flex;
   gap: 10px;
   width: 100%;
+}
+
+.auth-card__option {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  padding: 4px 6px 4px 2px;
+  border-radius: 8px;
+  transition: background var(--transition-fast);
+  line-height: 1.5;
+}
+
+.auth-card__option:hover {
+  background: rgba(99, 102, 241, 0.08);
+}
+
+.auth-card__option-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.auth-card__option-box {
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+  border-radius: 4px;
+  border: 1px solid rgba(148, 163, 184, 0.50);
+  background: rgba(255, 255, 255, 0.55);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  flex-shrink: 0;
+  transition: all var(--transition-fast);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.60);
+}
+
+.auth-card__option--checked .auth-card__option-box {
+  background: linear-gradient(135deg, var(--brand-500), var(--brand-600));
+  border-color: var(--brand-600);
+  box-shadow: 0 2px 8px rgba(79, 70, 229, 0.30);
+}
+
+.auth-card__option-text {
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.auth-card__agreement {
+  color: var(--text-link);
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.auth-card__agreement:hover {
+  text-decoration: underline;
 }
 
 .auth-card__code-btn {

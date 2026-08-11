@@ -101,11 +101,14 @@ def _b64url_decode(data: str) -> bytes:
     return base64.urlsafe_b64decode(data + padding)
 
 
-def create_token(user_id: int, email: str, expire_hours: int | None = None) -> str:
+def create_token(
+    user_id: int, email: str, token_version: int = 0, expire_hours: int | None = None
+) -> str:
     """签发 HS256 JWT。
 
     :param user_id: 用户主键（sub 声明）
     :param email: 用户邮箱
+    :param token_version: token 版本号（tv 声明），改密/改邮箱后 +1 使旧 token 失效
     :param expire_hours: 有效期（小时），默认取配置 jwt_expire_hours
     :return: "header.payload.signature" 三段式 token
     """
@@ -115,6 +118,7 @@ def create_token(user_id: int, email: str, expire_hours: int | None = None) -> s
     payload: dict[str, Any] = {
         "sub": str(user_id),  # 主题：用户 ID
         "email": email,
+        "tv": token_version,  # token 版本号：改密/改邮箱后旧 token 立即失效
         "iat": now,  # 签发时间
         "exp": now + expire_hours * 3600,  # 过期时间
     }

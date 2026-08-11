@@ -27,6 +27,9 @@ from __future__ import annotations
 from celery import Celery  # Celery 任务框架
 
 from app.config import settings  # Broker / Backend 配置
+from app.logging_setup import setup_logging  # loguru 统一日志（worker 侧同样接管）
+
+setup_logging()  # worker/beat 进程日志格式与 API 网关一致
 
 # 全局唯一 Celery 应用（include 声明任务模块，随应用启动自动注册）
 celery_app = Celery(

@@ -19,3 +19,18 @@ export function getCurrentUser() {
 export function logout() {
   return callTool('logout_api_v1_auth_logout_post', {})
 }
+
+export function changePassword(oldPassword, newPassword) {
+  return callTool('change_password_api_v1_auth_change_password_post', {
+    old_password: oldPassword,
+    new_password: newPassword,
+  })
+}
+
+export function changeEmail(email, code) {
+  return callTool('change_email_api_v1_auth_change_email_post', { email, code })
+}
+
+export function resetPassword(email, code, password) {
+  return callTool('reset_password_api_v1_auth_reset_post', { email, code, password })
+}

@@ -31,6 +31,8 @@ warnings.filterwarnings("ignore", category=UserWarning)  # 抑制 huggingface �
 import chromadb  # 向量库客户端（HTTP 模式连接容器）
 from rank_bm25 import BM25Okapi  # BM25 关键词检索算法
 
+from app.config import settings  # 读取应用配置（Chroma 地址等）
+
 # ---- jieba 分词（不可用时自动降级为字符级 n-gram） ----
 try:
     import jieba  # 中文分词（BM25 用）
@@ -63,8 +65,8 @@ class HybridRetriever:
 
     def __init__(
         self,
-        chroma_host: str = "localhost",
-        chroma_port: int = 8000,
+        chroma_host: str | None = None,
+        chroma_port: int | None = None,
         collection_name: str = "doc_templates",
         seed_path: str | None = None,
     ):
@@ -74,6 +76,9 @@ class HybridRetriever:
         :param collection_name: 向量 Collection 名
         :param seed_path: seed_templates.json 路径（BM25 语料源）
         """
+        # 默认从配置读取（本机为 8002，避免 8000 被其他进程占用时顶掉 Chroma）
+        chroma_host = chroma_host or settings.chroma_host
+        chroma_port = chroma_port or settings.chroma_port
         # 连接 ChromaDB 容器（HTTP 模式）
         self.chroma_client = chromadb.HttpClient(host=chroma_host, port=chroma_port)
         self.collection = self.chroma_client.get_or_create_collection(collection_name)

@@ -26,13 +26,22 @@
 from __future__ import annotations
 
 import hashlib  # 文件内容哈希（input_file_hash）
+import json  # SSE 事件序列化
 import logging  # 标准库日志
 import os  # 本地输出路径判断
+import time  # SSE 心跳计时
 import uuid  # 任务 UUID 生成
+from urllib.parse import quote  # 下载文件名 URL 编码
 from typing import Annotated, Any  # 泛型类型 / FastAPI 依赖注入标注
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import (
+    FileResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,  # SSE 实时推送
+)
 from sqlalchemy import text  # 健康检查 SELECT 1
 from sqlalchemy.orm import Session  # 数据库会话类型
 
@@ -50,8 +59,13 @@ from app.services.storage import StorageUnavailable, storage  # MinIO 客户端
 logger = logging.getLogger(__name__)  # 模块级日志器
 router = APIRouter(prefix="/api/v1")  # 统一接口前缀
 
-# 终态集合（惰性过期判定 / 下载准入共用）
-_TERMINAL_STATUS = {TaskStatus.SUCCESS, TaskStatus.FAILED, TaskStatus.EXPIRED}
+# 终态集合（惰性过期判定 / 下载准入 / 取消准入共用）
+_TERMINAL_STATUS = {
+    TaskStatus.SUCCESS,
+    TaskStatus.FAILED,
+    TaskStatus.EXPIRED,
+    TaskStatus.CANCELLED,
+}
 
 
 def _ok(**data: Any) -> dict[str, Any]:
@@ -62,6 +76,22 @@ def _ok(**data: Any) -> dict[str, Any]:
 def _err(code: int, msg: str) -> dict[str, Any]:
     """业务错误响应：{"code":N, "msg":...}（HTTP 200，蓝图 7.2 错误码）。"""
     return {"code": code, "msg": msg}
+
+
+# SSE 终态：命中即关闭流（含 U2 新增的 cancelled）
+_SSE_TERMINAL = {"success", "failed", "expired", "cancelled"}
+
+
+def _build_download_url(task: Any) -> str | None:
+    """构造下载地址：统一走 /api/v1/download/{task_id}（后端代理，浏览器同源直取）。"""
+    if not (task.output_file_path and task.status in (TaskStatus.SUCCESS, TaskStatus.FAILED)):
+        return None
+    return f"/api/v1/download/{task.id}"
+
+
+def _sse_event(event: str, data: Any) -> str:
+    """格式化一个 SSE 事件帧（event + data 双行 + 空行结尾）。"""
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
 def _ensure_not_expired(db: Any, task: Any) -> bool:
@@ -149,9 +179,6 @@ def process_upload(
             input_file_path=key,
             user_id=owner.id,
         )
-        # 登录用户提交任务扣 1 次额度（游客 999 次不受影响）
-        if owner.id != 1:
-            deduct_credit(db, owner.id, 1)
     except Exception as exc:  # DB 异常 → 4001（文件已入库，任务不可见）
         logger.error("[process] 任务创建失败: %s", exc)
         return _err(4001, f"内部错误：任务创建失败（{exc}）")
@@ -249,19 +276,11 @@ def get_task_status(
             task_id, status=status, progress=progress, step=step, logs=logs
         )
 
-    # ---- 3. 成功时附下载地址（5 分钟预签名 URL）----
-    download_url: str | None = None
-    if status == TaskStatus.SUCCESS.value and task.output_file_path:
-        if os.path.exists(task.output_file_path):  # MinIO 上传失败 → 本地文件兜底
-            download_url = f"/api/v1/download/{task_id}"  # 走本地文件流
-        else:  # 正常路径：预签名 URL
-            try:
-                download_url = storage.presign_url(
-                    task.output_file_path, bucket=settings.minio_output_bucket
-                )
-            except Exception as exc:  # MinIO 不可用 → 降级本地下载
-                logger.warning("[task] 预签名生成失败，降级本地下载: %s", exc)
-                download_url = f"/api/v1/download/{task_id}"
+    # ---- 3. 结果预览：校验报告（validator 节点写入，复用 agent_state_snapshot 列）----
+    validation_report = task.agent_state_snapshot or None
+
+    # ---- 4. 成功/失败时附下载地址（5 分钟预签名 URL）----
+    download_url = _build_download_url(task)
 
     return _ok(
         status=status,
@@ -269,17 +288,169 @@ def get_task_status(
         step=step,
         logs=logs,
         download_url=download_url,
+        validation_report=validation_report,
+        retry_count=task.retry_count,
     )
+
+
+@router.get("/task/{task_id}/stream")
+def stream_task_status(
+    task_id: str, db: Annotated[Session, Depends(get_db)] = None
+) -> StreamingResponse:
+    """SSE 实时推送：状态/进度/步骤/日志变更即推，15s 心跳，终态关闭。
+
+    数据源：Redis 快照优先（与轮询协议一致），不可用降级 1s 间隔读 MySQL。
+    客户端断开自动终止；重连延迟 retry: 3000 已内嵌。
+    """
+    from app.crud.agent_logs import list_logs  # 延迟导入避免循环
+    from app.crud.tasks import get_task
+
+    def generate():
+        last_status = last_progress = last_step = None
+        sent_logs = 0
+        last_heartbeat = time.monotonic()
+        yield "retry: 3000\n\n"
+        while True:
+            try:
+                task = get_task(db, task_id)
+                if task is None:  # 任务不存在/已过期 → 错误帧后关闭
+                    yield _sse_event("error", {"code": 2001, "msg": "任务不存在或已过期"})
+                    return
+                if _ensure_not_expired(db, task):
+                    yield _sse_event(
+                        "status",
+                        {
+                            "status": "expired",
+                            "progress": task.progress,
+                            "step": task.current_step,
+                            "logs": [l.log_message for l in list_logs(db, task_id)],
+                            "download_url": None,
+                            "retry_count": task.retry_count,
+                            "validation_report": task.agent_state_snapshot,
+                        },
+                    )
+                    return
+                # 快照优先，miss 降级 MySQL（与 GET /task 读侧一致）
+                snapshot = task_cache.get_snapshot(task_id)
+                if snapshot is not None:
+                    status, progress, step = (
+                        snapshot["status"],
+                        snapshot["progress"],
+                        snapshot["step"],
+                    )
+                    logs = snapshot["logs"] or []
+                else:
+                    status, progress, step = (
+                        task.status.value,
+                        task.progress,
+                        task.current_step,
+                    )
+                    logs = [l.log_message for l in list_logs(db, task_id)]
+
+                # ---- log 增量推送（逐条 event: log）----
+                for line in logs[sent_logs:]:
+                    yield _sse_event("log", line)
+                sent_logs = len(logs)
+
+                # ---- status 变更推送（含终态下载地址）----
+                changed = (
+                    status != last_status
+                    or progress != last_progress
+                    or step != last_step
+                )
+                if changed:
+                    last_status, last_progress, last_step = status, progress, step
+                    yield _sse_event(
+                        "status",
+                        {
+                            "status": status,
+                            "progress": progress,
+                            "step": step,
+                            "logs": logs,
+                            "download_url": _build_download_url(task),
+                            "retry_count": task.retry_count,
+                            "validation_report": task.agent_state_snapshot,
+                        },
+                    )
+                if status in _SSE_TERMINAL:  # 终态 → 关闭流
+                    return
+
+                # ---- 15s 心跳（注释帧，保持连接/穿透代理超时）----
+                now = time.monotonic()
+                if now - last_heartbeat >= 15:
+                    last_heartbeat = now
+                    yield ": ping\n\n"
+                time.sleep(1)
+            except GeneratorExit:  # 客户端断开 → 静默终止
+                return
+            except Exception:  # 单次迭代异常 → 错误帧后关闭，避免死循环
+                logger.exception("[stream] SSE 推送异常，关闭流")
+                yield _sse_event("error", {"code": 4001, "msg": "流式推送中断"})
+                return
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # 双保险：nginx 层 proxy_buffering off 已配
+        },
+    )
+
+
+@router.post("/task/{task_id}/cancel")
+def cancel_task(
+    task_id: str, db: Annotated[Session, Depends(get_db)] = None
+) -> Any:
+    """取消任务：revoke Celery + 写取消标志（Redis + MySQL status=cancelled）。
+
+    Windows solo worker 无 terminate 能力，靠标志位协作退出：节点入口
+    （supervisor/planner/executor）轮询 is_cancelled 提前结束，error_node
+    终态守卫保证不覆盖 cancelled。
+    :param task_id: 任务 UUID
+    :return: {"code":0,"msg":"任务已取消"} 或错误码
+    """
+    from app.crud.agent_logs import add_log
+    from app.crud.tasks import get_task, mark_cancelled
+
+    task = get_task(db, task_id)
+    if task is None:
+        return _err(2001, "任务不存在或已过期")
+    if _ensure_not_expired(db, task):
+        return _err(3001, "任务已过期（超过 24 小时生命周期）")
+    if task.status in _TERMINAL_STATUS:
+        return _err(2002, "任务已结束，无法取消")
+
+    # ---- 1. Celery revoke（未投递任务直接移除；运行中任务靠标志位）----
+    try:
+        from app.celery_app import celery_app  # 延迟导入避免循环
+
+        celery_app.control.revoke(task_id, terminate=False)
+    except Exception as exc:  # broker 不可用 → 标志位兜底，不阻塞取消
+        logger.warning("[cancel] revoke 失败(不影响取消): %s", exc)
+
+    # ---- 2. 取消标志（Redis 供节点轮询，MySQL 供降级判定与前端展示）----
+    task_cache.set_cancelled_flag(task_id)
+    mark_cancelled(db, task_id)
+    add_log(
+        db,
+        task_id=task_id,
+        agent_node="api",
+        message="用户请求取消任务",
+        level=LogLevel.INFO,
+    )
+    return _ok(msg="任务已取消")
 
 
 @router.get("/download/{task_id}")
 def download_result(
     task_id: str, db: Annotated[Session, Depends(get_db)] = None
 ) -> Any:
-    """下载处理结果：302 重定向 MinIO 预签名 URL（或本地文件流）。
+    """下载处理结果：本地文件流优先，MinIO 对象由后端代理返回。
 
     :param task_id: 任务 UUID
-    :return: 302 重定向 / FileResponse / 错误码
+    :return: FileResponse / Response / 错误码
     """
     from app.crud.tasks import get_task
 
@@ -297,21 +468,44 @@ def download_result(
 
     # ---- 本地路径（MinIO 上传失败兜底）→ 直接返回文件流 ----
     if os.path.exists(task.output_file_path):
+        # 顺带把本地兜底文件补传 MinIO，避免重启/清理后丢失（失败不影响本次下载）
+        try:
+            from app.crud.tasks import update_task  # 延迟导入
+            from datetime import datetime
+
+            key = (
+                f"{datetime.now():%Y/%m/%d}/{task.id}/"
+                f"{os.path.basename(task.output_file_path)}"
+            )
+            storage.upload_file(
+                task.output_file_path,
+                bucket=settings.minio_output_bucket,
+                key=key,
+            )
+            update_task(db, task.id, output_file_path=key)
+            logger.info("[download] 本地兜底文件已补传 MinIO: %s", key)
+        except Exception as exc:
+            logger.warning("[download] 本地兜底文件补传失败: %s", exc)
         return FileResponse(
             task.output_file_path,
             filename=os.path.basename(task.output_file_path),  # modified_xxx.docx
             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         )
 
-    # ---- 正常路径：302 → MinIO 预签名 URL（5 分钟有效）----
+    # ---- 正常路径：后端代理 MinIO 对象（避免浏览器直连的跨域/主机名问题）----
     try:
-        url = storage.presign_url(
+        data = storage.read_object(
             task.output_file_path, bucket=settings.minio_output_bucket
         )
-        return RedirectResponse(url, status_code=302)
-    except Exception as exc:  # 预签名失败（含 MinIO 不可用）→ 4001
-        logger.error("[download] MinIO 预签名失败: %s", exc)
+    except Exception as exc:  # 读取失败（含 MinIO 不可用）→ 4001
+        logger.error("[download] MinIO 读取失败: %s", exc)
         return _err(4001, f"内部错误：文件存储不可用（{exc}）")
+    filename = os.path.basename(task.output_file_path)
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+    )
 
 
 @router.get("/health")
@@ -347,6 +541,3 @@ def health_check(db: Annotated[Session, Depends(get_db)] = None) -> dict[str, An
         "status": "ok" if all(services.values()) else "degraded",
         "services": services,
     }
-
-
-

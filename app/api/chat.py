@@ -22,8 +22,14 @@ from typing import Annotated, Any  # 依赖注入标注
 
 from fastapi import APIRouter, Depends, File, Form, UploadFile  # 路由与依赖
 from pydantic import BaseModel, Field  # 请求体模型
+from sqlalchemy.orm import Session  # 数据库会话类型
 
-from app.api.auth import get_current_admin, get_current_user_optional  # 认证依赖
+from app.api.auth import (  # 认证依赖
+    get_current_admin,
+    get_current_user,
+    get_current_user_optional,
+)
+from app.db import get_db  # 会话注入
 from app.services import knowledge  # 知识库服务
 from app.services.knowledge import KnowledgeUnavailable  # 知识库异常
 from app.services.llm import LlmUnavailable, chat_text  # LLM 服务
@@ -53,14 +59,15 @@ class ChatBody(BaseModel):
 def chat(
     body: ChatBody,
     user: Annotated[Any | None, Depends(get_current_user_optional)] = None,
+    db: Annotated[Session, Depends(get_db)] = None,
 ) -> dict[str, Any]:
     """聊天机器人：个人知识库 + 平台知识库检索 → 拼装上下文 → qwen 生成回答。"""
     message = body.message.strip()
     if not message:
         return _err(1001, "参数错误：消息不能为空")
 
-    # ---- 1. RAG 检索（个人知识库 + 平台知识库 + 模板集合三路召回）----
     try:
+        # ---- 1. RAG 检索（个人知识库 + 平台知识库 + 模板集合三路召回）----
         hits = knowledge.search(message, top_k=4)
         template_hits = knowledge.search_templates(message, top_k=3)
         user_hits = (
@@ -68,57 +75,86 @@ def chat(
             if user is not None
             else []
         )
+        if not user_hits and not hits and not template_hits:
+            answer = (
+                "还没有可参考的知识。你可以在「我的知识库」上传自己的文档，"
+                "或等待管理员维护平台知识库，我才能结合文档准确回答。"
+            )
+            sources: list[dict[str, Any]] = []
+        else:
+            # ---- 2. 拼装参考上下文 ----
+            context_parts: list[str] = []
+            for h in user_hits:
+                context_parts.append(
+                    f"[我的知识库·{h['title']}（分类：{h['category'] or '未分类'}）] {h['content']}"
+                )
+            for h in hits:
+                context_parts.append(
+                    f"[平台知识库·{h['title']}（分类：{h['category'] or '未分类'}）] {h['content']}"
+                )
+            for t in template_hits:
+                context_parts.append(
+                    f"[模板·{t['template_name'] or t['title']}（分类：{t['category'] or '未分类'}）] {t['content']}"
+                )
+
+            system_prompt = (
+                "你是 DocAgent 的模板推荐助手，负责根据用户描述的行业/文档类型，"
+                "推荐最合适的排版模板，并简要说明模板的格式要点。\n"
+                "回答规范：\n"
+                "1. 只依据下方“参考资料”中的内容回答，不要编造参考资料里没有的模板。\n"
+                "2. 先直接给出推荐模板名称，再列出 2-4 条格式要点。\n"
+                "3. 用户自己的知识库（我的知识库）优先于平台知识库，回答时可优先采用。\n"
+                "4. 若参考资料不足以回答，如实说明，并建议用户补充自己的文档。\n"
+                "5. 用简洁、友好的中文回答，必要时使用短列表。"
+            )
+            user_prompt = f"用户问题：{message}\n\n参考资料：\n" + "\n".join(context_parts)
+
+            # ---- 3. LLM 生成回答 ----
+            try:
+                resp = chat_text(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    temperature=0.3,
+                    max_retries=1,
+                    timeout=60.0,
+                )
+            except LlmUnavailable as exc:
+                logger.warning("[chat] LLM 不可用: %s", exc)
+                return _err(1402, "AI 服务暂不可用，请稍后再试")
+            answer = resp["content"]
+            sources = user_hits + hits + template_hits
     except KnowledgeUnavailable as exc:
-        return _err(1401, f"知识库检索失败：{exc.msg if hasattr(exc, 'msg') else exc}")
+        return _err(1401, f"知识库检索失败：{exc}")
+    except Exception as exc:  # 兜底：任何未预期异常都转为业务错误，避免 500
+        logger.exception("[chat] 聊天处理异常")
+        return _err(1499, "聊天服务暂时不可用，请稍后再试")
 
-    if not user_hits and not hits and not template_hits:
-        return _ok(
-            answer="还没有可参考的知识。你可以在「我的知识库」上传自己的文档，"
-            "或等待管理员维护平台知识库，我才能结合文档准确回答。",
-            sources=[],
-        )
+    # ---- 4. 登录用户自动保存聊天记录（失败不影响回答）----
+    if user is not None and db is not None:
+        try:
+            from app.crud import chat_messages
 
-    # ---- 2. 拼装参考上下文 ----
-    context_parts: list[str] = []
-    for h in user_hits:
-        context_parts.append(
-            f"[我的知识库·{h['title']}（分类：{h['category'] or '未分类'}）] {h['content']}"
-        )
-    for h in hits:
-        context_parts.append(
-            f"[平台知识库·{h['title']}（分类：{h['category'] or '未分类'}）] {h['content']}"
-        )
-    for t in template_hits:
-        context_parts.append(
-            f"[模板·{t['template_name'] or t['title']}（分类：{t['category'] or '未分类'}）] {t['content']}"
-        )
+            chat_messages.add_message(db, user.id, "user", message)
+            chat_messages.add_message(db, user.id, "assistant", answer, sources)
+        except Exception as exc:
+            db.rollback()
+            logger.warning("[chat] 聊天记录保存失败: %s", exc)
 
-    system_prompt = (
-        "你是 DocAgent 的模板推荐助手，负责根据用户描述的行业/文档类型，"
-        "推荐最合适的排版模板，并简要说明模板的格式要点。\n"
-        "回答规范：\n"
-        "1. 只依据下方“参考资料”中的内容回答，不要编造参考资料里没有的模板。\n"
-        "2. 先直接给出推荐模板名称，再列出 2-4 条格式要点。\n"
-        "3. 用户自己的知识库（我的知识库）优先于平台知识库，回答时可优先采用。\n"
-        "4. 若参考资料不足以回答，如实说明，并建议用户补充自己的文档。\n"
-        "5. 用简洁、友好的中文回答，必要时使用短列表。"
-    )
-    user_prompt = f"用户问题：{message}\n\n参考资料：\n" + "\n".join(context_parts)
+    return _ok(answer=answer, sources=sources)
 
-    # ---- 3. LLM 生成回答 ----
-    try:
-        resp = chat_text(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            temperature=0.3,
-            max_retries=1,
-            timeout=60.0,
-        )
-    except LlmUnavailable as exc:
-        logger.warning("[chat] LLM 不可用: %s", exc)
-        return _err(1402, "AI 服务暂不可用，请稍后再试")
 
-    return _ok(answer=resp["content"], sources=user_hits + hits + template_hits)
+@router.get("/chat/history")
+def chat_history(
+    user: Annotated[Any, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)] = None,
+    limit: int = 100,
+) -> dict[str, Any]:
+    """当前用户的聊天历史（新 → 旧，最多返回 limit 条）。"""
+    from app.crud import chat_messages
+
+    limit = max(1, min(int(limit), 500))
+    rows = chat_messages.list_messages(db, user.id, limit=limit)
+    return _ok(messages=[chat_messages.serialize_message(m) for m in rows])
 
 
 @router.post("/rag/upload")
@@ -198,3 +234,6 @@ def knowledge_stats(
         return _ok(**knowledge.stats())
     except KnowledgeUnavailable as exc:
         return _err(1401, str(exc))
+    except Exception as exc:  # 兜底：避免 Chroma 异常直接 500
+        logger.exception("[rag/stats] 平台知识库统计异常")
+        return _err(1401, f"平台知识库统计失败：{exc}")

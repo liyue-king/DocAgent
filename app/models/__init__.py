@@ -19,6 +19,8 @@
 
 from app.db import Base  # 导入 ORM 公共基类（重导出，供建表脚本使用）
 from app.models.agent_log import AgentLog  # Agent 执行日志模型
+from app.models.chat_message import ChatMessage  # 聊天记录模型
+from app.models.credit_log import CreditLog  # 积分流水模型
 from app.models.enums import LogLevel, TaskStatus  # 日志级别 / 任务状态枚举
 from app.models.knowledge_doc import KnowledgeDoc  # 用户自定义知识库文档
 from app.models.payment import Payment  # 支付订单模型
@@ -30,6 +32,8 @@ from app.models.user import User  # 用户模型（P0 匿名游客 id=1）
 __all__ = [
     "AgentLog",
     "Base",
+    "ChatMessage",
+    "CreditLog",
     "KnowledgeDoc",
     "LogLevel",
     "Payment",

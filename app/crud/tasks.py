@@ -186,6 +186,18 @@ def mark_expired(db: Session, task_id: str) -> Task | None:
     return update_task(db, task_id, status=TaskStatus.EXPIRED)  # 状态 -> 过期
 
 
+def mark_cancelled(db: Session, task_id: str) -> Task | None:
+    """用户取消任务（Windows solo worker 靠 Redis/MySQL 标志位协作退出）。
+
+    :param db: 数据库会话
+    :param task_id: 任务 UUID
+    :return: 更新后的任务
+    """
+    return update_task(
+        db, task_id, status=TaskStatus.CANCELLED, completed_at=datetime.now()
+    )  # 状态 -> 已取消 + 完成时间
+
+
 def list_expired_tasks(db: Session, now: datetime | None = None) -> list[Task]:
     """查询所有已过期的非终态任务（清理任务用，P1）。
 
@@ -199,7 +211,12 @@ def list_expired_tasks(db: Session, now: datetime | None = None) -> list[Task]:
         .filter(
             Task.expires_at < now,  # 已过过期时间
             Task.status.notin_(
-                [TaskStatus.SUCCESS, TaskStatus.FAILED, TaskStatus.EXPIRED]
+                [
+                    TaskStatus.SUCCESS,
+                    TaskStatus.FAILED,
+                    TaskStatus.EXPIRED,
+                    TaskStatus.CANCELLED,
+                ]
             ),  # 且非终态
         )
         .all()

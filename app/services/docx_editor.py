@@ -22,11 +22,14 @@
 from __future__ import annotations
 
 import io  # 内存缓冲：文档克隆
+import logging  # 标准库日志
 from typing import Any  # 泛型类型
 
 from docx import Document  # 文档对象
 from docx.enum.text import WD_LINE_SPACING  # 行距规则枚举
 from docx.oxml.ns import qn  # 命名空间查询：设置中文字体 w:eastAsia
+
+logger = logging.getLogger(__name__)  # 模块级日志器
 
 # =============================================================================
 # 原子操作函数
@@ -171,6 +174,8 @@ def apply_template(
     style_group: dict[str, list[int]] = {}  # {style: [para_id, ...]}
     for p in dom["paragraphs"]:
         s = p["style"]
+        if s == "normal" and p.get("keep_format"):
+            continue  # 保留原格式段落（封面字段/强调）不套模板
         if s in ("heading_1", "heading_2", "heading_3", "normal"):
             style_group.setdefault(s, []).append(p["id"])
 
@@ -216,25 +221,36 @@ def apply_template(
 # =============================================================================
 
 
-def backup_doc(file_path: str) -> tuple[Document, bytes]:
+def backup_doc(file_path: str) -> tuple[Document | None, bytes | None]:
     """打开文档并创建内存备份（BytesIO 序列化）。
 
     :param file_path: docx 文件路径
-    :return: (文档对象, 备份字节)——修改失败时用 backup 重建 doc
+    :return: (文档对象, 备份字节)；文件损坏/不可读/备份为空时返回
+             (None, None)（调用方须判空走失败分支，勿解包使用）
     """
-    doc = Document(file_path)  # 打开原文档
-    buf = io.BytesIO()  # 内存缓冲区
-    doc.save(buf)  # 序列化到内存
-    buf.seek(0)  # 重置读取游标
-    return doc, buf.getvalue()  # 返回 doc + 备份字节
+    try:
+        doc = Document(file_path)  # 打开原文档
+        buf = io.BytesIO()  # 内存缓冲区
+        doc.save(buf)  # 序列化到内存
+        if buf.tell() == 0:  # 序列化无输出（防御，理论上不发生）
+            logger.warning("[docx_editor] backup_doc 序列化输出为空: %s", file_path)
+            return None, None
+        buf.seek(0)  # 重置读取游标
+        return doc, buf.getvalue()  # 返回 doc + 备份字节
+    except Exception as exc:  # 文件损坏/权限/空文件 → (None, None)
+        logger.warning("[docx_editor] backup_doc 打开/备份失败: %s", exc)
+        return None, None
 
 
-def restore_doc(backup_bytes: bytes) -> Document:
+def restore_doc(backup_bytes: bytes | None) -> Document:
     """从备份字节重建文档对象（回滚用）。
 
     :param backup_bytes: backup_doc 返回的备份字节
     :return: 原始文档对象
+    :raises ValueError: 备份字节为空（不可回滚）
     """
+    if not backup_bytes:
+        raise ValueError("备份字节为空，无法回滚")
     return Document(io.BytesIO(backup_bytes))
 
 
@@ -269,6 +285,8 @@ def compute_coverage(doc: Document, template_config: dict[str, Any]) -> dict[str
 
     for p in new_dom["paragraphs"]:
         s = p["style"]
+        if s == "normal" and p.get("keep_format"):
+            continue  # 保留原格式段落不参与覆盖率校验（不会被模板覆盖）
         target = styles.get(s)  # 目标样式
         if target is None:
             continue  # 非 key 样式（other）不参与评估

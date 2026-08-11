@@ -96,12 +96,15 @@
 </template>
 
 <script setup>
-import { ref, nextTick } from 'vue'
+import { ref, nextTick, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { ChatDotRound, MagicStick, UserFilled } from '@element-plus/icons-vue'
 import AppNavbar from '@/components/AppNavbar.vue'
 import AppFooter from '@/components/AppFooter.vue'
-import { sendChat } from '@/api/chat.js'
+import { getChatHistory, sendChat } from '@/api/chat.js'
+import { useAuthStore } from '@/stores/auth.js'
+
+const { isLoggedIn } = useAuthStore()
 
 const draft = ref('')
 const loading = ref(false)
@@ -113,6 +116,19 @@ const suggestions = [
   '政府单位的红头文件怎么排版？',
   '创业公司写商业计划书用什么模板？',
 ]
+
+async function loadHistory() {
+  if (!isLoggedIn.value) return
+  try {
+    const data = await getChatHistory()
+    messages.value = (data.messages || []).slice().reverse()
+    await scrollToBottom()
+  } catch {
+    // 历史记录加载失败不影响新对话
+  }
+}
+
+onMounted(loadHistory)
 
 function renderText(text) {
   return (text || '')
@@ -142,8 +158,12 @@ async function send(text) {
     const data = await sendChat(message)
     messages.value.push({ role: 'assistant', content: data.answer, sources: data.sources || [] })
   } catch (err) {
-    messages.value.push({ role: 'assistant', content: err.message || '请求失败，请稍后再试' })
-    ElMessage.error(err.message || '请求失败')
+    const raw = err.message || ''
+    const friendly = raw.includes('Status code') || raw.includes('Internal Server Error')
+      ? 'AI 服务暂时不可用，请稍后再试'
+      : raw || '请求失败，请稍后再试'
+    messages.value.push({ role: 'assistant', content: friendly })
+    ElMessage.error(friendly)
   } finally {
     loading.value = false
     await scrollToBottom()

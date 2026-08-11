@@ -49,6 +49,7 @@ def validator_node(state: dict[str, Any]) -> dict[str, Any]:
         report = compute_coverage(doc, template_config)  # 五项扫描
     except Exception as exc:
         msg = f"校验阶段读取文档失败：{exc}"
+        report = {"passed": False, "coverage": 0.0, "total": 0, "matched": 0, "missed": []}
         logs = notify(
             state,
             msg,
@@ -57,19 +58,14 @@ def validator_node(state: dict[str, Any]) -> dict[str, Any]:
             status=TaskStatus.FAILED,
             progress=100,
             step="校验读取失败",
+            agent_state_snapshot=report,  # 落库供前端结果预览
         )
         updates.update(
             {
                 "agent_logs": logs,
                 "status": "failed",
                 "error_message": msg,
-                "validation_report": {
-                    "passed": False,
-                    "coverage": 0.0,
-                    "total": 0,
-                    "matched": 0,
-                    "missed": [],
-                },
+                "validation_report": report,
             }
         )
         return updates
@@ -88,6 +84,7 @@ def validator_node(state: dict[str, Any]) -> dict[str, Any]:
             status=TaskStatus.VALIDATING,
             progress=95,
             step="校验通过",
+            agent_state_snapshot=report,  # 落库供前端结果预览
         )
         updates.update(
             {"validation_report": report, "agent_logs": logs, "status": "done"}
@@ -107,6 +104,7 @@ def validator_node(state: dict[str, Any]) -> dict[str, Any]:
             status=TaskStatus.RETRYING,  # 前端黄色闪烁
             progress=30,  # 进度回退至 30 重新推进
             step=f"校验未通过，AI重规划(第{new_retry}次)",
+            agent_state_snapshot=report,  # 落库供前端结果预览
         )
         updates.update(
             {
@@ -130,6 +128,7 @@ def validator_node(state: dict[str, Any]) -> dict[str, Any]:
             status=TaskStatus.VALIDATING,
             progress=95,
             step="重试耗尽，判定成功",
+            agent_state_snapshot=report,  # 落库供前端结果预览
         )
         updates.update(
             {"validation_report": report, "agent_logs": logs, "status": "done"}
@@ -144,6 +143,7 @@ def validator_node(state: dict[str, Any]) -> dict[str, Any]:
             status=TaskStatus.VALIDATING,
             progress=100,
             step="校验未通过",
+            agent_state_snapshot=report,  # 落库供前端结果预览
         )
         updates.update(
             {

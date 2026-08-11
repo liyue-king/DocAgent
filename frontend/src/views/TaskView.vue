@@ -28,7 +28,12 @@
 
           <div class="task-card__footer">
             <span class="task-card__eta">预计还需 {{ estimatedTime }} 秒</span>
-            <el-button text @click="router.push('/upload')">返回上传</el-button>
+            <div class="task-card__actions">
+              <el-button text @click="router.push('/upload')">返回上传</el-button>
+              <el-button type="danger" plain :loading="cancelling" @click="handleCancel">
+                取消任务
+              </el-button>
+            </div>
           </div>
         </div>
 
@@ -46,20 +51,43 @@
             </div>
           </div>
 
+          <ValidationReport :report="validationReport" />
+
           <div class="result-card__actions">
+            <a
+              v-if="downloadUrl"
+              :href="downloadUrl"
+              class="result-card__primary result-card__primary--link"
+            >
+              下载文档
+            </a>
             <el-button
+              v-else
               type="primary"
               size="large"
               class="result-card__primary"
-              :disabled="!downloadUrl"
-              @click="downloadFile"
+              disabled
             >
               下载文档
             </el-button>
             <el-button size="large" @click="router.push('/upload')">再来一单</el-button>
           </div>
 
-          <p class="result-card__hint">下载链接 5 分钟后过期，请及时保存</p>
+          <p class="result-card__hint">点击「下载文档」即可保存排版结果</p>
+        </div>
+
+        <!-- 已取消 -->
+        <div v-else-if="status === 'cancelled'" class="result-card result-card--error">
+          <div class="result-card__icon result-card__icon--error">
+            <el-icon><CircleClose /></el-icon>
+          </div>
+          <h2 class="result-card__title">任务已取消</h2>
+          <p class="result-card__desc">该任务已被取消，未产生下载结果</p>
+          <div class="result-card__actions">
+            <el-button type="primary" size="large" class="result-card__primary" @click="router.push('/upload')">
+              返回上传
+            </el-button>
+          </div>
         </div>
 
         <!-- 失败 / 过期 / 加载失败 -->
@@ -69,6 +97,8 @@
           </div>
           <h2 class="result-card__title">{{ failTitle }}</h2>
           <p class="result-card__desc">{{ failDesc }}</p>
+
+          <ValidationReport :report="validationReport" />
 
           <el-collapse v-if="displayLogs.length" class="result-card__logs">
             <el-collapse-item title="查看详细日志">
@@ -101,20 +131,23 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { Warning, Document, CircleClose } from '@element-plus/icons-vue'
 import AppNavbar from '@/components/AppNavbar.vue'
 import AppFooter from '@/components/AppFooter.vue'
 import ProgressBar from '@/components/ProgressBar.vue'
 import LogTerminal from '@/components/LogTerminal.vue'
 import AnimatedCheck from '@/components/AnimatedCheck.vue'
+import ValidationReport from '@/components/ValidationReport.vue'
 import { useTaskPolling } from '@/composables/useTaskPolling.js'
+import { cancelTask } from '@/api/tasks'
 
 const route = useRoute()
 const router = useRouter()
 
 const taskId = route.params.id
 const startTime = ref(Date.now())
+const cancelling = ref(false)
 
 const {
   status,
@@ -124,7 +157,9 @@ const {
   downloadUrl,
   errorMessage,
   retryCount,
+  validationReport,
   startPolling,
+  stopPolling,
 } = useTaskPolling(taskId, { interval: 2000 })
 
 const isProcessing = computed(() => {
@@ -165,12 +200,31 @@ const elapsedTime = computed(() => {
   return `${seconds} 秒`
 })
 
-function downloadFile() {
-  if (!downloadUrl.value) {
-    ElMessage.warning('下载地址尚未生成，请稍后再试')
-    return
+async function handleCancel() {
+  try {
+    await ElMessageBox.confirm(
+      '确定要取消当前任务吗？已执行的修改将无法保存。',
+      '取消任务',
+      {
+        confirmButtonText: '确认取消',
+        cancelButtonText: '继续处理',
+        type: 'warning',
+      }
+    )
+  } catch {
+    return // 用户选择继续处理
   }
-  window.open(downloadUrl.value, '_blank')
+  cancelling.value = true
+  try {
+    await cancelTask(taskId)
+    ElMessage.success('任务已取消')
+    stopPolling()
+    status.value = 'cancelled'
+  } catch (err) {
+    ElMessage.error(err.message || '取消失败，请重试')
+  } finally {
+    cancelling.value = false
+  }
 }
 
 onMounted(() => {
@@ -246,6 +300,12 @@ onMounted(() => {
   color: var(--text-secondary);
 }
 
+.task-card__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .result-card {
   background: var(--glass-surface);
   backdrop-filter: var(--glass-blur);
@@ -317,6 +377,28 @@ onMounted(() => {
 .result-card__primary {
   background: linear-gradient(135deg, var(--brand-500), var(--brand-600));
   border: none;
+}
+
+.result-card__primary--link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 120px;
+  height: 40px;
+  padding: 0 22px;
+  border-radius: var(--radius-md);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+  box-shadow: 0 8px 22px rgba(91, 91, 240, 0.30), inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  transition: transform var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.result-card__primary--link:hover {
+  color: #fff;
+  transform: translateY(-1px);
+  box-shadow: 0 10px 26px rgba(91, 91, 240, 0.36), inset 0 1px 0 rgba(255, 255, 255, 0.38);
 }
 
 .result-card__hint {

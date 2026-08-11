@@ -5,6 +5,10 @@ export function sendChat(message) {
   return callTool('chat_api_v1_chat_post', { message })
 }
 
+export function getChatHistory(limit = 100) {
+  return callTool('chat_history_api_v1_chat_history_get', { limit })
+}
+
 export function uploadKnowledge(formData) {
   // 用户自定义知识库（独立）
   return client.post('/knowledge', formData, {

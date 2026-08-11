@@ -84,6 +84,50 @@ def create_template(
     return tpl  # 返回模板
 
 
+def update_template(
+    db: Session,
+    template_id: int,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    config: dict[str, Any] | None = None,
+) -> Template | None:
+    """更新模板字段（管理员后台使用）。
+
+    :param db: 数据库会话
+    :param template_id: 模板主键
+    :param name/description/config: 待更新字段（None=不更新）
+    :return: 更新后的模板对象；不存在返回 None
+    """
+    tpl = db.get(Template, template_id)
+    if tpl is None:
+        return None
+    if name is not None:
+        tpl.name = name
+    if description is not None:
+        tpl.description = description
+    if config is not None:
+        tpl.config = config
+    db.commit()
+    db.refresh(tpl)
+    return tpl
+
+
+def delete_template(db: Session, template_id: int) -> bool:
+    """删除模板（管理员后台使用）。
+
+    :param db: 数据库会话
+    :param template_id: 模板主键
+    :return: 是否删除成功（不存在返回 False）
+    """
+    tpl = db.get(Template, template_id)
+    if tpl is None:
+        return False
+    db.delete(tpl)
+    db.commit()
+    return True
+
+
 def increment_usage_count(db: Session, template_id: int) -> None:
     """模板命中计数 +1（用于 RAG 结果统计）。
 

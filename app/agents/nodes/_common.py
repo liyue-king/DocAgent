@@ -144,6 +144,33 @@ def notify(
     return logs
 
 
+def is_cancelled(task_id: str) -> bool:
+    """取消判定：Redis 标志位优先，不可用时降级查 MySQL 状态。
+
+    :param task_id: 任务 UUID（空则恒 False）
+    :return: True=用户已取消，节点应提前退出（Windows solo 无 terminate）
+    """
+    if not task_id:
+        return False
+    from app.services import task_cache  # 延迟导入
+
+    flag = task_cache.get_cancelled_flag(task_id)
+    if flag is not None:  # Redis 可用：以标志位为准
+        return flag
+    try:  # Redis 不可用 → 查 MySQL tasks.status
+        from app.crud.tasks import get_task
+        from app.db import SessionLocal
+
+        db = SessionLocal()
+        try:
+            task = get_task(db, task_id)
+            return bool(task and task.status == TaskStatus.CANCELLED)
+        finally:
+            db.close()
+    except Exception:
+        return False  # DB 也不可用 → 视为未取消，继续处理
+
+
 def build_object_key(task_id: str, file_name: str, *, modified: bool = False) -> str:
     """构造 MinIO 对象 Key（对齐蓝图 5.3：{y}/{m}/{d}/{task_id}/...）。
 

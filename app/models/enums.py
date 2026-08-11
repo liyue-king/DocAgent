@@ -21,7 +21,7 @@ import enum  # 导入标准库枚举模块
 
 
 class TaskStatus(str, enum.Enum):
-    """任务状态（9 个值，对齐 tasks.status ENUM 与三端状态映射）。"""
+    """任务状态（10 个值，对齐 tasks.status ENUM 与三端状态映射）。"""
 
     PENDING = "pending"  # 已提交，等待 Worker 处理
     RETRIEVING = "retrieving"  # RAG 模板检索中
@@ -32,6 +32,7 @@ class TaskStatus(str, enum.Enum):
     SUCCESS = "success"  # 处理成功（可下载）
     FAILED = "failed"  # 处理失败
     EXPIRED = "expired"  # 已过期（24h 生命周期结束）
+    CANCELLED = "cancelled"  # 用户主动取消（Windows solo 靠标志位协作退出）
 
 
 class LogLevel(str, enum.Enum):

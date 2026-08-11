@@ -35,6 +35,8 @@ from app.db import Base  # ORM 公共基类
 
 if TYPE_CHECKING:
     # 仅用于类型检查/IDE 提示，运行时不会真正导入（避免循环导入）
+    from app.models.chat_message import ChatMessage
+    from app.models.credit_log import CreditLog
     from app.models.knowledge_doc import KnowledgeDoc
     from app.models.payment import Payment
     from app.models.task import Task
@@ -68,6 +70,10 @@ class User(Base):
         server_default="0",
         comment="是否管理员（可维护平台知识库）",
     )
+    # token 版本号：改密/改邮箱时 +1，旧 JWT 立即失效（tv 声明比对）
+    token_version: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", comment="改密后旧token失效"
+    )
     # 创建时间：毫秒精度，默认当前时间
     created_at: Mapped[datetime] = mapped_column(
         DATETIME(fsp=3),
@@ -88,6 +94,10 @@ class User(Base):
     payments: Mapped[list[Payment]] = relationship(back_populates="user")
     # 关系：一个用户拥有多篇自定义知识库文档（反向导航 user.knowledge_docs）
     knowledge_docs: Mapped[list[KnowledgeDoc]] = relationship(back_populates="user")
+    # 关系：一个用户拥有多笔积分流水（反向导航 user.credit_logs）
+    credit_logs: Mapped[list[CreditLog]] = relationship(back_populates="user")
+    # 关系：一个用户拥有多条聊天记录（反向导航 user.chat_messages）
+    chat_messages: Mapped[list[ChatMessage]] = relationship(back_populates="user")
 
     def __repr__(self) -> str:  # pragma: no cover
         """调试友好的对象描述。"""

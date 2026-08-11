@@ -1,0 +1,36 @@
+# ============================================================
+# DocAgent 生产部署（复用 docker-compose.yml，追加运维组件）
+# 启动：docker compose -f docker-compose.prod.yml up -d --build
+# 相比本地版：
+#   - 前端仅暴露 80/443（HTTPS 需先运行 scripts/gen_self_signed.ps1 生成证书，
+#     或把正式证书放入 ./data/certs/server.{crt,key}）
+#   - 追加 mysql-backup 容器：每日 03:00 mysqldump 备份到 ./data/backup，保留 7 天
+# ============================================================
+
+include:
+  - docker-compose.yml
+
+services:
+  # ---------- 9. MySQL 每日备份（宿主机 Windows 无 cron，用容器 crond） ----------
+  mysql-backup:
+    build:
+      context: .
+      dockerfile: deploy/backup.Dockerfile
+    image: docagent-mysql-backup
+    container_name: docagent-mysql-backup
+    restart: always
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      MYSQL_USER: root
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-docagent123}
+      MYSQL_DATABASE: docagent
+      BACKUP_DIR: /backup
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-7}
+    volumes:
+      - ${VOLUME_BASE:-./data}/backup:/backup
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - docagent-net

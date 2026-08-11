@@ -51,9 +51,27 @@ const routes = [
     meta: { requiresAuth: true, adminOnly: true },
   },
   {
+    path: '/admin/templates',
+    name: 'AdminTemplates',
+    component: () => import('@/views/AdminTemplatesView.vue'),
+    meta: { requiresAuth: true, adminOnly: true },
+  },
+  {
+    path: '/admin/users',
+    name: 'AdminUsers',
+    component: () => import('@/views/AdminUsersView.vue'),
+    meta: { requiresAuth: true, adminOnly: true },
+  },
+  {
     path: '/history',
     name: 'History',
     component: () => import('@/views/HistoryView.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/user-center',
+    name: 'UserCenter',
+    component: () => import('@/views/UserCenterView.vue'),
     meta: { requiresAuth: true },
   },
   {

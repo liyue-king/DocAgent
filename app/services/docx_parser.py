@@ -49,10 +49,79 @@ def _normalize_style(style_name: str) -> str:
         return "heading_3"  # 四级标题降级为三级
     if re.search(r"正文|normal|body", name):
         return "normal"
+    if re.search(r"no spacing|无间距|normal \(web\)|网页正文|list paragraph|列表段落", name):
+        return "normal"  # 视觉上等同正文的样式统一按正文处理
     if re.search(r"副标题|subtitle", name):
         return "heading_2"  # 副标题视为二级标题
     # 无法匹配的样式归为 other（如列表/引用/题注）
     return "other"
+
+
+# 常见章节编号（用于把"正文样式+直接格式"的标题识别出来）
+_H1_CHAPTER_RE = re.compile(r"^第[0-9一二三四五六七八九十百]+[章节篇卷部分]")
+_H1_CN_RE = re.compile(r"^[一二三四五六七八九十]+、")
+_H1_DOT_RE = re.compile(r"^[0-9]+[、.．]")
+_H2_CN_PAREN_RE = re.compile(r"^（[一二三四五六七八九十0-9]+）")
+_H2_DOT_RE = re.compile(r"^[0-9]+\.[0-9]+")
+_H3_DOT_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+")
+_DATE_RE = re.compile(r"^[0-9]{4}\s*年")
+
+
+def _infer_heading_level(
+    para: Any,
+    style_key: str,
+    text: str,
+    max_size_pt: float,
+    any_bold: bool,
+) -> str:
+    """按内容特征推断标题层级（方案 A：样式名不是标题但外观像标题时识别出来）。
+
+    优先看章节编号（第X章 / 一、 / （一） / 1.1 / 1.1.1），再看外观
+    （居中 + 加粗 + 大字号 + 文本短）。封面字段（如"姓    名 李  越"）
+    含连续空格，视为排版占位而非标题，不参与推断。
+
+    :param para: python-docx 段落对象（用于读取对齐方式）
+    :param style_key: 样式名归一化结果
+    :param text: 段落纯文本（已 strip）
+    :param max_size_pt: 段落内最大字号（磅）
+    :param any_bold: 段落内是否存在加粗 run
+    :return: heading_1 / heading_2 / heading_3 / 原 style_key
+    """
+    if style_key in ("heading_1", "heading_2", "heading_3"):
+        return style_key  # Word 内置标题样式优先
+    if not text or len(text) > 80:
+        return style_key  # 空段/长正文不判标题
+    if re.search(r"\s{2,}", text):
+        return style_key  # 封面字段式排版（多空格占位）不判标题
+    if _DATE_RE.match(text):
+        return style_key  # 日期（如 2025年11月24日）不判标题
+    if len(text) > 60:
+        return style_key  # 超过 60 字的段落视为正文，不判标题
+
+    centered = bool(
+        para.alignment is not None and para.alignment.name == "CENTER"
+    )
+    # ---- 编号优先 ----
+    if _H1_CHAPTER_RE.match(text):
+        return "heading_1"
+    if _H3_DOT_RE.match(text) and (any_bold or max_size_pt >= 12):
+        return "heading_3"
+    if _H2_DOT_RE.match(text) and (any_bold or max_size_pt >= 12):
+        return "heading_2"
+    if _H2_CN_PAREN_RE.match(text) and (any_bold or max_size_pt >= 12):
+        return "heading_2"
+    if _H1_CN_RE.match(text) and (any_bold or max_size_pt >= 14):
+        return "heading_1"
+    if _H1_DOT_RE.match(text) and (any_bold or max_size_pt >= 14):
+        return "heading_1"
+    # ---- 外观兜底（无编号）----
+    if centered and any_bold and max_size_pt >= 14 and len(text) <= 40:
+        return "heading_1"  # 居中大标题
+    if any_bold and max_size_pt >= 16 and len(text) <= 30:
+        return "heading_2"
+    if any_bold and max_size_pt >= 14 and len(text) <= 20:
+        return "heading_3"
+    return style_key
 
 
 def _read_east_asia_font(run: Any) -> str | None:
@@ -134,6 +203,9 @@ def build_dom_serial(dom: dict[str, Any]) -> dict[str, Any]:
                 "font_east_asia": p["font_east_asia"],
                 "font_size_pt": p["font_size_pt"],
                 "bold": p["bold"],
+                "any_bold": p["any_bold"],
+                "max_font_size_pt": p["max_font_size_pt"],
+                "keep_format": p["keep_format"],
                 "line_spacing_rule": p["line_spacing_rule"],
                 "line_spacing_value": p["line_spacing_value"],
                 "space_before_pt": p["space_before_pt"],
@@ -177,6 +249,8 @@ def build_dom(doc: Document) -> dict[str, Any]:
         text = para.text.strip()
 
         # ----- 提取字体信息：取第一个 run 的格式（多数段落只有 1 个 run）-----
+        max_font_size_pt = 0.0
+        any_bold = False
         if para.runs:
             run = para.runs[0]  # 首个 run 代表段落主体格式
             font_name = run.font.name  # 西文字体
@@ -184,11 +258,25 @@ def build_dom(doc: Document) -> dict[str, Any]:
             font_size_pt = round(font_size.pt, 1) if font_size else 0  # 字号（磅）
             bold = run.font.bold is True  # 是否加粗（排除 None 和 False）
             font_east_asia = _read_east_asia_font(run)  # 中文字体（w:eastAsia）
+            for r in para.runs:
+                if r.font.bold:
+                    any_bold = True
+                if r.font.size is not None:
+                    max_font_size_pt = max(max_font_size_pt, round(r.font.size.pt, 1))
         else:
             font_name = None
             font_size_pt = 0
             bold = False
             font_east_asia = None
+        if max_font_size_pt == 0:
+            max_font_size_pt = font_size_pt
+
+        # 智能标题识别：样式名不是标题但内容/外观像标题 → 提升层级
+        style_key = _infer_heading_level(
+            para, style_key, text, max_font_size_pt, any_bold
+        )
+        # 保留原格式标记：正文样式的段落原本有加粗（封面字段/强调）→ 模板不强覆盖
+        keep_format = style_key == "normal" and any_bold
 
         # ----- 提取行距与段间距（Validator 五项校验的另两维数据源）-----
         line_spacing_rule, line_spacing_value = _read_line_spacing(para)
@@ -204,6 +292,9 @@ def build_dom(doc: Document) -> dict[str, Any]:
             "font_east_asia": font_east_asia,  # 中文字体名（如"宋体"，可为 None）
             "font_size_pt": font_size_pt,  # 字号（磅）
             "bold": bold,  # 是否加粗
+            "any_bold": any_bold,  # 段落内是否有任意加粗 run（保留格式判定）
+            "max_font_size_pt": max_font_size_pt,  # 段落内最大字号（标题识别用）
+            "keep_format": keep_format,  # 保留原格式（模板不覆盖）
             "line_spacing_rule": line_spacing_rule,  # 行距规则（SINGLE/MULTIPLE/EXACTLY...）
             "line_spacing_value": line_spacing_value,  # 行距值（倍数或磅值）
             "space_before_pt": space_before_pt,  # 段前距（磅）

@@ -1,17 +1,86 @@
 # ============================================================
-# DocAgent 基础设施一键启动（Day 1 交付物）
-# 启动：docker compose up -d
+# DocAgent 全栈一键启动（基础设施 + 应用服务）
+# 启动：docker compose up -d --build
 # 停止：docker compose down
 # 清理数据（删除容器+数据卷）：docker compose down -v
 # 数据落盘：默认 ./data 目录；可通过环境变量覆盖，例如：
 #   Windows:  VOLUME_BASE=D:/DocAgent/data docker compose up -d
-#   或直接修改下方 ${VOLUME_BASE:-./data} 为绝对路径
+# 凭据与密钥：优先读取 .env（cp .env.example .env），未设置时用下方默认值
 # ============================================================
 
 # 定义网络，让所有容器在同一个局域网内互访
 networks:
   docagent-net:
     driver: bridge
+
+# 应用服务共享环境（容器内服务名地址）；覆盖 .env 中的 localhost 指向
+x-app-env: &app-env
+  MYSQL_HOST: mysql
+  MYSQL_PORT: "3306"
+  REDIS_URL: redis://redis:6379/0
+  REDIS_CACHE_URL: redis://redis:6379/2
+  CELERY_BROKER_URL: redis://redis:6379/0
+  CELERY_RESULT_BACKEND: redis://redis:6379/1
+  MINIO_ENDPOINT: minio:9000
+  MINIO_SECURE: "false"
+  CHROMA_HOST: chromadb
+  CHROMA_PORT: "8000"
+  API_BASE_URL: http://localhost
+  LLM_PROVIDER: ${LLM_PROVIDER:-qwen}
+  DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+  DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com/v1}
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+  QWEN_API_KEY: ${QWEN_API_KEY:-}
+  QWEN_BASE_URL: ${QWEN_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+  LLM_MODEL: ${LLM_MODEL:-qwen3.7-max}
+  JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
+  JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+  JWT_EXPIRE_HOURS: ${JWT_EXPIRE_HOURS:-72}
+  ADMIN_EMAILS: ${ADMIN_EMAILS:-}
+  SMTP_HOST: ${SMTP_HOST:-smtp.qq.com}
+  SMTP_PORT: ${SMTP_PORT:-465}
+  SMTP_USER: ${SMTP_USER:-}
+  SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+  SMTP_FROM: ${SMTP_FROM:-}
+  EMAIL_CODE_TTL_SECONDS: ${EMAIL_CODE_TTL_SECONDS:-300}
+  EMAIL_CODE_COOLDOWN_SECONDS: ${EMAIL_CODE_COOLDOWN_SECONDS:-60}
+  EMAIL_CODE_MAX_ATTEMPTS: ${EMAIL_CODE_MAX_ATTEMPTS:-5}
+  ALIPAY_APP_ID: ${ALIPAY_APP_ID:-}
+  ALIPAY_PRIVATE_KEY_PATH: /app/keys/app_private_key.pem
+  ALIPAY_PUBLIC_KEY_PATH: /app/keys/alipay_public_key.pem
+  ALIPAY_GATEWAY_URL: ${ALIPAY_GATEWAY_URL:-https://openapi-sandbox.dl.alipaydev.com/gateway.do}
+  ALIPAY_NOTIFY_URL: ${ALIPAY_NOTIFY_URL:-http://localhost/api/v1/pay/notify}
+  ALIPAY_RETURN_URL: ${ALIPAY_RETURN_URL:-http://localhost/pricing}
+  ALIPAY_USER_ID: ${ALIPAY_USER_ID:-}
+  ALIPAY_QUERY_TIMEOUT_SECONDS: ${ALIPAY_QUERY_TIMEOUT_SECONDS:-5}
+  MINERU_API_KEY: ${MINERU_API_KEY:-}
+  MINERU_BASE_URL: ${MINERU_BASE_URL:-https://mineru.net/api/v4}
+  MINERU_TIMEOUT_SECONDS: ${MINERU_TIMEOUT_SECONDS:-120}
+  MAX_FILE_SIZE_MB: ${MAX_FILE_SIZE_MB:-20}
+  TASK_EXPIRE_HOURS: ${TASK_EXPIRE_HOURS:-24}
+  MAX_RETRY_COUNT: ${MAX_RETRY_COUNT:-3}
+  API_RATE_LIMIT: ${API_RATE_LIMIT:-10}
+  CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-*}
+  API_CLIENT_TIMEOUT_SECONDS: ${API_CLIENT_TIMEOUT_SECONDS:-30}
+  API_PORT: "8001"
+  CHECKPOINT_DB_PATH: /app/checkpoints/checkpoint.db
+  REDIS_SNAPSHOT_TTL_SECONDS: ${REDIS_SNAPSHOT_TTL_SECONDS:-3600}
+  REDIS_LOGS_MAX: ${REDIS_LOGS_MAX:-20}
+  REDIS_RATELIMIT_TTL_SECONDS: ${REDIS_RATELIMIT_TTL_SECONDS:-60}
+  REDIS_CONNECT_TIMEOUT_SECONDS: ${REDIS_CONNECT_TIMEOUT_SECONDS:-2}
+  REDIS_SOCKET_TIMEOUT_SECONDS: ${REDIS_SOCKET_TIMEOUT_SECONDS:-2}
+  MINIO_INPUT_BUCKET: ${MINIO_INPUT_BUCKET:-docagent-input}
+  MINIO_OUTPUT_BUCKET: ${MINIO_OUTPUT_BUCKET:-docagent-output}
+  MINIO_KNOWLEDGE_BUCKET: ${MINIO_KNOWLEDGE_BUCKET:-docagent-knowledge}
+  MINIO_PRESIGN_EXPIRES_SECONDS: ${MINIO_PRESIGN_EXPIRES_SECONDS:-300}
+  MINIO_CONNECT_TIMEOUT_SECONDS: ${MINIO_CONNECT_TIMEOUT_SECONDS:-5}
+  MINIO_READ_TIMEOUT_SECONDS: ${MINIO_READ_TIMEOUT_SECONDS:-5}
+  MINIO_CONNECT_RETRIES: ${MINIO_CONNECT_RETRIES:-0}
+  CHROMA_HEALTH_TIMEOUT_SECONDS: ${CHROMA_HEALTH_TIMEOUT_SECONDS:-2}
+  CELERY_SOFT_TIME_LIMIT_SECONDS: ${CELERY_SOFT_TIME_LIMIT_SECONDS:-240}
+  CELERY_TIME_LIMIT_SECONDS: ${CELERY_TIME_LIMIT_SECONDS:-300}
+  CELERY_BEAT_SWEEP_INTERVAL_SECONDS: ${CELERY_BEAT_SWEEP_INTERVAL_SECONDS:-3600}
 
 services:
   # ---------- 1. MySQL 业务数据库 ----------
@@ -20,16 +89,17 @@ services:
     container_name: docagent-mysql
     restart: always
     environment:
-      MYSQL_ROOT_PASSWORD: docagent123
+      MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD:-docagent123}
       MYSQL_DATABASE: docagent
       # 解决 Windows 下中文乱码问题
       MYSQL_CHARACTER_SET_SERVER: utf8mb4
       MYSQL_COLLATION_SERVER: utf8mb4_unicode_ci
     ports:
       # 宿主机 3306 已被本机 MySQL(mysqld) 占用，容器映射改到 3307，两者共存
-      - "3307:3306"
+      - "${MYSQL_PORT_MAP:-3307}:3306"
     volumes:
       - ${VOLUME_BASE:-./data}/mysql:/var/lib/mysql
+      - ${VOLUME_BASE:-./data}/backup:/backup
     networks:
       - docagent-net
     healthcheck:
@@ -66,8 +136,8 @@ services:
       - "9000:9000"   # API 端口（代码连接用）
       - "9001:9001"   # 管理后台 Web 界面（http://localhost:9001）
     environment:
-      MINIO_ROOT_USER: docagent
-      MINIO_ROOT_PASSWORD: docagent123
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-docagent}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-docagent123}
     volumes:
       - ${VOLUME_BASE:-./data}/minio:/data
     command: server /data --console-address ":9001"
@@ -82,11 +152,12 @@ services:
 
   # ---------- 4. ChromaDB 向量数据库（RAG 核心） ----------
   chromadb:
-    image: chromadb/chroma:0.5.0
+    image: chromadb/chroma:1.5.9   # 与 pyproject 中 chromadb-client>=1.5.9 匹配
     container_name: docagent-chroma
     restart: always
     ports:
       - "8000:8000"
+      - "8002:8000"   # 备用宿主机端口（本机应用优先使用 8002，避免与 8000 冲突）
     volumes:
       - ${VOLUME_BASE:-./data}/chroma:/chroma/chroma
     environment:
@@ -96,7 +167,91 @@ services:
     networks:
       - docagent-net
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      # chroma 1.5.9 镜像无 curl/wget/python（仅编译二进制），用 bash /dev/tcp 探测端口
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8000"]
       interval: 30s
       timeout: 10s
       retries: 3
+
+  # ---------- 5. 后端 API 网关（uvicorn 8001） ----------
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: docagent-backend
+    container_name: docagent-web
+    restart: always
+    environment: *app-env
+    ports:
+      - "8001:8001"
+    volumes:
+      # 模型缓存（BGE-M3 等首次下载后挂卷持久化，镜像重建不重复下载）
+      - ${VOLUME_BASE:-./data}/models:/models
+      - ${VOLUME_BASE:-./data}/logs:/app/logs
+      - ${VOLUME_BASE:-./data}/checkpoints:/app/checkpoints
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
+    networks:
+      - docagent-net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8001/api/v1/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # ---------- 6. Celery Worker（LangGraph 编排执行） ----------
+  worker:
+    image: docagent-backend
+    container_name: docagent-worker
+    restart: always
+    environment: *app-env
+    command: ["uv", "run", "celery", "-A", "app.celery_app", "worker", "-P", "solo", "--loglevel=info"]
+    volumes:
+      - ${VOLUME_BASE:-./data}/models:/models
+      - ${VOLUME_BASE:-./data}/logs:/app/logs
+      - ${VOLUME_BASE:-./data}/checkpoints:/app/checkpoints
+    depends_on:
+      web:
+        condition: service_healthy
+    networks:
+      - docagent-net
+
+  # ---------- 7. Celery Beat（周期任务：过期任务清扫） ----------
+  beat:
+    image: docagent-backend
+    container_name: docagent-beat
+    restart: always
+    environment: *app-env
+    command: ["uv", "run", "celery", "-A", "app.celery_app", "beat", "--loglevel=info"]
+    depends_on:
+      web:
+        condition: service_healthy
+    networks:
+      - docagent-net
+
+  # ---------- 8. 前端（nginx 静态托管 + /api /mcp 反代，80/443） ----------
+  frontend:
+    build:
+      context: .
+      dockerfile: deploy/frontend.Dockerfile
+    image: docagent-frontend
+    container_name: docagent-frontend
+    restart: always
+    ports:
+      - "${FRONTEND_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      # 自签证书目录（scripts/gen_self_signed.ps1 生成）；无证书时仅 HTTP
+      - ${VOLUME_BASE:-./data}/certs:/etc/nginx/certs
+    depends_on:
+      web:
+        condition: service_healthy
+    networks:
+      - docagent-net

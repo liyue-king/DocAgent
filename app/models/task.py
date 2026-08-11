@@ -16,7 +16,8 @@
 字段说明：
     - id：UUID 字符串，与 Celery task_id 一致（跨系统对齐）。
     - status：九态枚举，对应 LangGraph 状态机与前端六态视图。
-    - agent_state_snapshot：LangGraph 全量状态快照（JSON），便于排查。
+    - agent_state_snapshot：状态快照（JSON）——当前承载 validator 的
+      validation_report（覆盖率/missed 明细），供结果预览；后续可扩为全量状态。
     - expires_at = created_at + 24h（任务与文件的生命周期边界）。
 ====================================================================
 """

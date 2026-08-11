@@ -40,8 +40,21 @@
           </el-form-item>
 
           <div class="auth-card__options">
-            <el-checkbox v-model="form.remember">记住我</el-checkbox>
-            <a href="#" class="auth-card__link">忘记密码？</a>
+            <label
+              class="auth-card__option"
+              :class="{ 'auth-card__option--checked': form.remember }"
+            >
+              <input
+                v-model="form.remember"
+                type="checkbox"
+                class="auth-card__option-input"
+              />
+              <span class="auth-card__option-box" aria-hidden="true">
+                <el-icon v-if="form.remember" :size="12"><Check /></el-icon>
+              </span>
+              <span class="auth-card__option-text">记住我</span>
+            </label>
+            <a class="auth-card__link" @click.prevent="resetDialogVisible = true">忘记密码？</a>
           </div>
 
           <el-form-item>
@@ -64,6 +77,47 @@
     </main>
 
     <AppFooter />
+
+    <el-dialog
+      v-model="resetDialogVisible"
+      title="重置密码"
+      width="400px"
+      destroy-on-close
+      @closed="clearResetTimer"
+    >
+      <el-form ref="resetFormRef" :model="resetForm" :rules="resetRules" label-width="0">
+        <el-form-item prop="email">
+          <el-input
+            v-model="resetForm.email"
+            placeholder="注册邮箱"
+            :prefix-icon="Message"
+          />
+        </el-form-item>
+        <el-form-item prop="code">
+          <div class="auth-card__code-row">
+            <el-input v-model="resetForm.code" placeholder="邮箱验证码" maxlength="6" />
+            <el-button :disabled="resetCountdown > 0" @click="handleSendResetCode">
+              {{ resetCountdown > 0 ? `${resetCountdown}s` : '获取验证码' }}
+            </el-button>
+          </div>
+        </el-form-item>
+        <el-form-item prop="password">
+          <el-input
+            v-model="resetForm.password"
+            type="password"
+            placeholder="新密码（6-64 位）"
+            show-password
+            :prefix-icon="Lock"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="resetDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="resetSubmitting" @click="handleResetPassword">
+          重置密码
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -71,10 +125,10 @@
 import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Document, Message, Lock } from '@element-plus/icons-vue'
+import { Check, Document, Lock, Message } from '@element-plus/icons-vue'
 import AppNavbar from '@/components/AppNavbar.vue'
 import AppFooter from '@/components/AppFooter.vue'
-import { login } from '@/api/auth.js'
+import { login, sendEmailCode, resetPassword } from '@/api/auth.js'
 import { useAuthStore } from '@/stores/auth.js'
 
 const router = useRouter()
@@ -118,6 +172,73 @@ async function handleSubmit() {
     ElMessage.error(err.message || '登录失败')
   } finally {
     loading.value = false
+  }
+}
+
+function clearResetTimer() {
+  if (resetTimer) {
+    clearInterval(resetTimer)
+    resetTimer = null
+    resetCountdown.value = 0
+  }
+}
+
+const resetDialogVisible = ref(false)
+const resetFormRef = ref(null)
+const resetSubmitting = ref(false)
+const resetCountdown = ref(0)
+let resetTimer = null
+
+const resetForm = reactive({ email: '', code: '', password: '' })
+const resetRules = {
+  email: [
+    { required: true, message: '请输入注册邮箱', trigger: 'blur' },
+    { type: 'email', message: '请输入有效的邮箱地址', trigger: 'blur' },
+  ],
+  code: [
+    { required: true, message: '请输入验证码', trigger: 'blur' },
+    { min: 6, max: 6, message: '验证码为 6 位数字', trigger: 'blur' },
+  ],
+  password: [
+    { required: true, message: '请输入新密码', trigger: 'blur' },
+    { min: 6, max: 64, message: '密码长度 6-64 位', trigger: 'blur' },
+  ],
+}
+
+async function handleSendResetCode() {
+  if (!resetForm.email) {
+    ElMessage.warning('请先填写注册邮箱')
+    return
+  }
+  try {
+    const data = await sendEmailCode(resetForm.email)
+    ElMessage.success(data.msg || '验证码已发送')
+    resetCountdown.value = 60
+    resetTimer = setInterval(() => {
+      resetCountdown.value -= 1
+      if (resetCountdown.value <= 0) clearInterval(resetTimer)
+    }, 1000)
+  } catch (err) {
+    ElMessage.error(err.message || '验证码发送失败')
+  }
+}
+
+async function handleResetPassword() {
+  const valid = await resetFormRef.value?.validate().catch(() => false)
+  if (!valid) return
+  resetSubmitting.value = true
+  try {
+    const data = await resetPassword(resetForm.email, resetForm.code, resetForm.password)
+    ElMessage.success(data.msg || '密码重置成功')
+    resetDialogVisible.value = false
+    form.email = resetForm.email
+    form.password = ''
+    resetForm.code = ''
+    resetForm.password = ''
+  } catch (err) {
+    ElMessage.error(err.message || '密码重置失败')
+  } finally {
+    resetSubmitting.value = false
   }
 }
 </script>
@@ -186,6 +307,62 @@ async function handleSubmit() {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 24px;
+}
+
+.auth-card__option {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  padding: 4px 6px 4px 2px;
+  border-radius: 8px;
+  transition: background var(--transition-fast);
+}
+
+.auth-card__option:hover {
+  background: rgba(99, 102, 241, 0.08);
+}
+
+.auth-card__option-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.auth-card__option-box {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  border: 1px solid rgba(148, 163, 184, 0.50);
+  background: rgba(255, 255, 255, 0.55);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  flex-shrink: 0;
+  transition: all var(--transition-fast);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.60);
+}
+
+.auth-card__option--checked .auth-card__option-box {
+  background: linear-gradient(135deg, var(--brand-500), var(--brand-600));
+  border-color: var(--brand-600);
+  box-shadow: 0 2px 8px rgba(79, 70, 229, 0.30);
+}
+
+.auth-card__option-text {
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.auth-card__code-row {
+  display: flex;
+  gap: 10px;
+  width: 100%;
 }
 
 .auth-card__link {

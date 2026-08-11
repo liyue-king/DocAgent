@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json  # 读取种子模板 JSON
 import logging  # 标准库日志
+import re  # 从提示词提取用户点名的模板
 from pathlib import Path  # 跨平台路径
 from typing import Any  # 泛型类型
 
@@ -35,6 +36,11 @@ _SEED_PATH = str(
 )  # 种子模板 JSON
 _retriever: Any | None = None  # HybridRetriever 延迟单例（首次使用才加载模型）
 _seeds_cache: list[dict[str, Any]] | None = None  # 种子模板缓存
+
+_PROMPT_TEMPLATE_PATTERNS = [
+    re.compile(r"[「『]([^」』]{1,40})[」』]"),
+    re.compile(r"按\s*[「『]?([^，。；\s]{2,30}?模板)[」』]?"),
+]
 
 
 def _load_seeds() -> list[dict[str, Any]]:
@@ -100,6 +106,44 @@ def _default_template() -> tuple[int | None, dict[str, Any], str]:
     return None, {}, "通用标准模板"
 
 
+def _extract_prompt_template_name(prompt: str) -> str:
+    """从用户提示中提取模板名（如「学术论文（本科毕业论文）」）。"""
+    for pattern in _PROMPT_TEMPLATE_PATTERNS:
+        m = pattern.search(prompt or "")
+        if m:
+            name = m.group(1).strip()
+            if name.endswith("模板") and name != "模板":
+                name = name[:-2]
+            return name
+    return ""
+
+
+def _resolve_prompt_template(
+    prompt: str,
+) -> tuple[int | None, dict[str, Any], str] | None:
+    """按用户点名模板解析 (template_id, config, name)；找不到返回 None。"""
+    name = _extract_prompt_template_name(prompt)
+    if not name:
+        return None
+    try:  # 优先 MySQL（业务主数据源）
+        from app.crud.templates import get_by_name  # 延迟导入
+        from app.db import SessionLocal
+
+        db = SessionLocal()
+        try:
+            tpl = get_by_name(db, name)
+            if tpl is not None:
+                return tpl.id, tpl.config, tpl.name
+        finally:
+            db.close()
+    except Exception as exc:  # DB 未就绪 → 种子兜底
+        logger.warning("[rag_searcher] 按提示词查模板失败，改用种子配置: %s", exc)
+    for idx, seed in enumerate(_load_seeds()):
+        if seed.get("name") == name:
+            return None, seed["config"], name
+    return None
+
+
 def rag_searcher_node(state: dict[str, Any]) -> dict[str, Any]:
     """RAG 检索节点：混合召回 → 三档置信度决策 → 选定模板配置。
 
@@ -107,6 +151,7 @@ def rag_searcher_node(state: dict[str, Any]) -> dict[str, Any]:
     :return: 状态更新（selected_template_id/config、检索记录、agent_logs、status）
     """
     prompt = state.get("user_prompt", "")
+    prompt_tpl = _resolve_prompt_template(prompt)  # 用户点名模板（降级时优先）
     updates: dict[str, Any] = {}
     result: dict[str, Any] | None = None  # 检索结果（供 retrieved_templates 记录）
 
@@ -142,30 +187,56 @@ def rag_searcher_node(state: dict[str, Any]) -> dict[str, Any]:
                 template_id=tpl_id,
             )
         else:  # low → 降级通用模板
-            tpl_id, config, default_name = _default_template()
+            if prompt_tpl is not None:
+                tpl_id, config, default_name = prompt_tpl
+                logs = notify(
+                    state,
+                    f"检索匹配度一般（相似度 {vector_score:.2f}），优先采用用户指定模板『{default_name}』",
+                    NODE_NAME,
+                    level=LogLevel.INFO,
+                    status=TaskStatus.PLANNING,
+                    progress=20,
+                    step="采用用户指定模板",
+                    template_id=tpl_id,
+                )
+            else:
+                tpl_id, config, default_name = _default_template()
+                logs = notify(
+                    state,
+                    f"未找到高度匹配模板（相似度 {vector_score:.2f}），已应用通用标准方案『{default_name}』",
+                    NODE_NAME,
+                    level=LogLevel.INFO,
+                    status=TaskStatus.PLANNING,
+                    progress=20,
+                    step="应用通用标准模板",
+                    template_id=tpl_id,
+                )
+    except Exception as exc:  # RAG 整体不可用 → 降级通用模板，不报错
+        logger.warning("[rag_searcher] RAG 检索不可用，降级通用模板: %s", exc)
+        if prompt_tpl is not None:
+            tpl_id, config, default_name = prompt_tpl
             logs = notify(
                 state,
-                f"未找到高度匹配模板（相似度 {vector_score:.2f}），已应用通用标准方案『{default_name}』",
+                f"RAG 检索服务不可用，优先采用用户指定模板『{default_name}』",
                 NODE_NAME,
                 level=LogLevel.INFO,
                 status=TaskStatus.PLANNING,
                 progress=20,
-                step="应用通用标准模板",
+                step="RAG 降级，采用用户指定模板",
                 template_id=tpl_id,
             )
-    except Exception as exc:  # RAG 整体不可用 → 降级通用模板，不报错
-        logger.warning("[rag_searcher] RAG 检索不可用，降级通用模板: %s", exc)
-        tpl_id, config, default_name = _default_template()
-        logs = notify(
-            state,
-            f"RAG 检索服务不可用，已降级通用标准模板『{default_name}』",
-            NODE_NAME,
-            level=LogLevel.INFO,
-            status=TaskStatus.PLANNING,
-            progress=20,
-            step="RAG 降级，应用通用模板",
-            template_id=tpl_id,
-        )
+        else:
+            tpl_id, config, default_name = _default_template()
+            logs = notify(
+                state,
+                f"RAG 检索服务不可用，已降级通用标准模板『{default_name}』",
+                NODE_NAME,
+                level=LogLevel.INFO,
+                status=TaskStatus.PLANNING,
+                progress=20,
+                step="RAG 降级，应用通用模板",
+                template_id=tpl_id,
+            )
 
     # 命中计数（尽力而为，失败不影响流程）
     if tpl_id is not None:

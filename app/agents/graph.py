@@ -17,17 +17,19 @@
          error_node ──► END            success_node ──► END
 
 说明：
-    - 未启用 Checkpointer（Redis db=3 属 P1）：状态在 Worker 进程内存中
-      跨节点传递，doc_dom 中的 para_obj 引用安全存活（已单测验证）。
-    - 若未来启用 Checkpointer，仅持久化 doc_dom_serial，恢复后由 Executor
-      从 working_file_path 重建 doc_dom。
+    - Checkpointer 用 SqliteSaver（蓝图 P1 原定 Redis db=3 降级原因：单机
+      solo worker 下 SQLite 更稳、零额外依赖、DB 文件随卷持久化）；状态全
+      部可序列化（docx 对象不进 state，节点各自从文件重建）。
 ====================================================================
 """
 
 from __future__ import annotations
 
+import os  # checkpoint 目录创建
+import sqlite3  # SqliteSaver 底层连接
 from typing import Any  # 泛型类型
 
+from langgraph.checkpoint.sqlite import SqliteSaver  # 断点持久化
 from langgraph.graph import END, START, StateGraph  # LangGraph 图构建
 
 from app.agents.nodes import (  # 节点与条件路由
@@ -57,12 +59,34 @@ ERROR = "error_node"
 
 
 def route_after_supervisor(state: dict[str, Any]) -> str:
-    """Supervisor 条件路由：解析失败→error_node，否则→rag_searcher。"""
-    return ERROR if state.get("status") == "failed" else RAG_SEARCHER
+    """Supervisor 条件路由：解析失败/已取消→error_node，否则→rag_searcher。"""
+    return ERROR if state.get("status") in ("failed", "cancelled") else RAG_SEARCHER
+
+
+_checkpointer: SqliteSaver | None = None  # 进程内单例（worker 长驻复用连接）
+
+
+def get_checkpointer() -> SqliteSaver:
+    """获取 SqliteSaver 单例：SQLite 连接在整个 Worker 进程生命周期内复用。
+
+    :return: SqliteSaver 实例（每次任务中断/恢复共享同一 DB 文件）
+    """
+    global _checkpointer
+    if _checkpointer is None:
+        from app.config import settings  # 延迟导入避免循环
+
+        db_path = settings.checkpoint_db_path
+        if db_path != ":memory:" and os.path.dirname(db_path):
+            os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        # check_same_thread=False：LangGraph 任务在独立线程执行，连接跨线程复用
+        _checkpointer = SqliteSaver(
+            sqlite3.connect(db_path, check_same_thread=False)
+        )
+    return _checkpointer
 
 
 def build_graph():
-    """装配并编译 LangGraph 状态机（含重试闭环）。
+    """装配并编译 LangGraph 状态机（含重试闭环 + SqliteSaver 断点持久化）。
 
     :return: 已编译的可执行图
     """
@@ -88,11 +112,11 @@ def build_graph():
     graph.add_edge(RAG_SEARCHER, PLANNER)
     graph.add_edge(PLANNER, ENTRY_GUARD)
 
-    # ---- EntryGuard 分支：合法→executor，非法→planner(LLM重试/兜底) ----
+    # ---- EntryGuard 分支：合法→executor，非法→planner(LLM重试/兜底)，取消→error ----
     graph.add_conditional_edges(
         ENTRY_GUARD,
         route_after_guard,
-        {EXECUTOR: EXECUTOR, PLANNER: PLANNER},
+        {EXECUTOR: EXECUTOR, PLANNER: PLANNER, ERROR: ERROR},
     )
 
     # ---- Executor 分支：成功→validator，失败→error ----
@@ -113,7 +137,7 @@ def build_graph():
     graph.add_edge(SUCCESS, END)
     graph.add_edge(ERROR, END)
 
-    return graph.compile()
+    return graph.compile(checkpointer=get_checkpointer())
 
 
 def run_agent(initial_state: dict[str, Any]) -> dict[str, Any]:
@@ -123,4 +147,6 @@ def run_agent(initial_state: dict[str, Any]) -> dict[str, Any]:
                           input_file_path（API 层构造，可含 output_file_path）
     :return: 终态状态字典（含 status / validation_report / agent_logs 等）
     """
-    return build_graph().invoke(initial_state)
+    # thread_id = task_id：Checkpointer 按任务维度存储断点，中断后可续跑
+    config = {"configurable": {"thread_id": initial_state.get("task_id") or "default"}}
+    return build_graph().invoke(initial_state, config=config)

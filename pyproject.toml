@@ -3,16 +3,25 @@ name = "docagent"
 version = "0.1.0"
 requires-python = ">=3.13"
 dependencies = [
+    "celery>=5.6.3",
+    "celery-types>=0.26.0",
     "chromadb-client>=1.5.9",
     "cryptography>=50.0.0",
     "fastapi>=0.141.1",
+    "fastapi-mcp>=0.4.0",
+    "httpx>=0.28.1",
     "jieba",
     "langgraph>=1.2.10",
+    "langgraph-checkpoint-sqlite>=2.0.0",
+    "loguru>=0.7.3",
+    "mcp<2",  # fastapi-mcp 0.4.0 与 mcp SDK 2.0 不兼容（Server 构造签名变更），锁定 1.x
     "minio>=7.2.20",
     "pydantic-settings>=2.14.2",
     "pymysql>=1.2.0",
     "python-docx>=1.2.0",
+    "python-multipart>=0.0.32",
     "rank-bm25>=0.2.2",
+    "redis>=8.1.0",
     "scikit-learn>=1.9.0",
     "sentence-transformers>=5.6.1",
     "sqlalchemy>=2.0.51",
@@ -21,8 +30,16 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
     "ruff>=0.16.1",
 ]
+
+[tool.pytest.ini_options]
+# 项目根加入 sys.path（uv run pytest 无需 PYTHONPATH 前缀）
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q"
 
 [tool.ruff.lint]
 # DTZ005：datetime.now() 无时区 —— 有意设计，与 MySQL CURRENT_TIMESTAMP 的本地时间对齐

@@ -9,12 +9,14 @@
   </div>
   <div class="app-shell">
     <router-view />
+    <AiAssistantBall />
   </div>
 </template>
 
 <script setup>
 import { onMounted } from 'vue'
 import { useAuthStore } from '@/stores/auth.js'
+import AiAssistantBall from '@/components/AiAssistantBall.vue'
 
 const { fetchCurrentUser } = useAuthStore()
 

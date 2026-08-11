@@ -29,7 +29,7 @@ from app.config import settings  # 大小限制
 from app.crud import knowledge_docs as docs_crud  # 文档清单 CRUD
 from app.db import get_db  # 会话注入
 from app.models import KnowledgeDoc, User  # 模型
-from app.services import knowledge  # 知识库服务
+from app.services import knowledge, mineru  # 知识库服务 / MinerU 解析（可选）
 from app.services.knowledge import KnowledgeUnavailable  # 知识库异常
 from app.services.storage import storage  # MinIO 原文清理
 
@@ -93,14 +93,16 @@ async def upload_my_doc(
     if not title:
         return _err(1001, "参数错误：请填写文档标题")
 
-    # ---- 1. 文本来源：文件优先，其次粘贴文本 ----
+    # ---- 1. 文本来源：文件优先（MinerU 解析 → 失败降级本地提取），其次粘贴文本 ----
     data: bytes | None = None
     if file is not None and file.filename:
         data = await file.read()
         if len(data) > _MAX_KB_FILE_MB * 1024 * 1024:
             return _err(1002, f"文件过大：知识文档最大 {_MAX_KB_FILE_MB}MB")
         try:
-            text = knowledge.extract_text(file.filename, data)
+            text = mineru.extract_text(file.filename, data)  # MinerU 优先（含图片）
+            if text is None:  # 未配置 key / 解析失败 → 降级本地提取
+                text = knowledge.extract_text(file.filename, data)
         except KnowledgeUnavailable as exc:
             return _err(1401, str(exc))
         raw_name = file.filename

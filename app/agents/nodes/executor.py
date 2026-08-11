@@ -25,7 +25,7 @@ from datetime import datetime  # 备份 Key 时间戳
 from pathlib import Path  # 默认输出路径
 from typing import Any  # 泛型类型
 
-from app.agents.nodes._common import notify  # 日志 + Key 生成
+from app.agents.nodes._common import is_cancelled, notify  # 取消判定 / 日志 + Key 生成
 from app.models import LogLevel, TaskStatus  # 枚举
 from app.services.docx_editor import apply_operations, backup_doc  # 文档操作
 from app.services.docx_parser import build_dom, build_dom_serial  # DOM 重建
@@ -51,6 +51,10 @@ def executor_node(state: dict[str, Any]) -> dict[str, Any]:
     output_file = state.get("output_file_path") or _default_output_path(working_file)
     task_id = state.get("task_id", "")
 
+    # 取消检查：文档操作可能耗时，取消后提前退出（error_node 收尾）
+    if is_cancelled(task_id):
+        return {"status": "cancelled", "error_message": "任务已取消"}
+
     updates: dict[str, Any] = {}
     source = (
         output_file if os.path.exists(output_file) else working_file
@@ -59,8 +63,11 @@ def executor_node(state: dict[str, Any]) -> dict[str, Any]:
     # ---- 1. 打开工作副本 + 内存备份 ----
     try:
         doc, backup_bytes = backup_doc(source)  # 打开 + 序列化内存备份
-    except Exception as exc:  # 文档损坏/路径缺失 → 失败（error_node 兜底）
-        msg = f"打开工作文档失败：{exc}"
+    except Exception as exc:  # 防御：backup_doc 内部已兜底，此处仅记录
+        logger.error("[executor] backup_doc 异常: %s", exc)
+        doc, backup_bytes = None, None
+    if doc is None or backup_bytes is None:  # 文档损坏/不可读 → 失败（error_node 兜底）
+        msg = f"打开工作文档失败：文档不可读或已损坏（{os.path.basename(source)}）"
         logs = notify(
             state,
             msg,
@@ -189,8 +196,7 @@ def executor_node(state: dict[str, Any]) -> dict[str, Any]:
 
     updates.update(
         {
-            "doc_dom": dom,  # 含 para_obj（仅内存，不入 Checkpointer）
-            "doc_dom_serial": build_dom_serial(dom),  # 纯数据 DOM
+            "doc_dom_serial": build_dom_serial(dom),  # 纯数据 DOM（全字段可序列化，入 Checkpointer）
             "backup_object_key": backup_key,
             "output_file_path": output_file,
             "executed_count": state.get("executed_count", 0) + executed_count,

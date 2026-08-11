@@ -9,6 +9,34 @@
           <p class="pricing-page__desc">按文档处理次数付费，无隐藏费用</p>
         </div>
 
+        <el-alert
+          v-if="paymentNotice"
+          :type="paymentNotice.status === 'paid' ? 'success' : 'warning'"
+          :closable="false"
+          show-icon
+          class="pricing-page__notice"
+        >
+          <template v-if="paymentNotice.status === 'paid'">
+            支付成功，{{ paymentNotice.credits }} 次额度已到账，现在就去体验智能排版吧！
+          </template>
+          <template v-else>
+            订单尚未完成支付，可前往
+            <router-link to="/user-center?tab=orders" class="pricing-page__notice-link">个人中心</router-link>
+            查看订单并继续支付
+          </template>
+        </el-alert>
+
+        <el-alert
+          v-if="pendingCount > 0 && !paymentNotice"
+          type="info"
+          :closable="false"
+          show-icon
+          class="pricing-page__notice"
+        >
+          你有 {{ pendingCount }} 笔待支付订单，
+          <router-link to="/user-center?tab=orders" class="pricing-page__notice-link">点击去支付</router-link>
+        </el-alert>
+
         <div class="pricing-grid">
           <div
             v-for="plan in plans"
@@ -63,18 +91,21 @@
 </template>
 
 <script setup>
-import { onMounted } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Check } from '@element-plus/icons-vue'
 import AppNavbar from '@/components/AppNavbar.vue'
 import AppFooter from '@/components/AppFooter.vue'
-import { createPayment, queryPayment } from '@/api/pay.js'
+import { createPayment, getMyOrders, queryPayment } from '@/api/pay.js'
 import { useAuthStore } from '@/stores/auth.js'
 
 const route = useRoute()
 const router = useRouter()
 const { isLoggedIn, fetchCurrentUser } = useAuthStore()
+
+const paymentNotice = ref(null)
+const pendingCount = ref(0)
 
 const plans = [
   {
@@ -132,14 +163,29 @@ onMounted(async () => {
   try {
     const data = await queryPayment(orderId)
     if (data.order.status === 'paid') {
-      ElMessage.success(`支付成功，已到账 ${data.order.credits} 次额度`)
+      paymentNotice.value = { status: 'paid', credits: data.order.credits }
       await fetchCurrentUser()
     } else {
-      ElMessage.info('订单尚未完成支付，可在订单列表中查看')
+      paymentNotice.value = { status: 'pending', credits: data.order.credits }
     }
   } catch (err) {
-    ElMessage.error(err.message || '订单查询失败')
+    paymentNotice.value = { status: 'pending', credits: 0 }
   }
+  loadPendingOrders()
+})
+
+async function loadPendingOrders() {
+  if (!isLoggedIn.value) return
+  try {
+    const data = await getMyOrders()
+    pendingCount.value = (data.orders || []).filter((o) => o.status === 'pending').length
+  } catch {
+    pendingCount.value = 0
+  }
+}
+
+onMounted(() => {
+  loadPendingOrders()
 })
 </script>
 
@@ -171,6 +217,16 @@ onMounted(async () => {
   font-size: 18px;
   color: var(--text-secondary);
   margin: 0;
+}
+
+.pricing-page__notice {
+  max-width: 720px;
+  margin: 0 auto 28px;
+}
+
+.pricing-page__notice-link {
+  color: var(--text-link);
+  font-weight: 600;
 }
 
 .pricing-grid {

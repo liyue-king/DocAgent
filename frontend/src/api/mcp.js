@@ -19,6 +19,8 @@ let sessionId = null
 let initPromise = null
 let toolsCache = null
 let requestId = 0
+let recoveringPromise = null
+let sessionGeneration = 0
 
 function getToken() {
   return localStorage.getItem('docagent_token') || ''
@@ -53,6 +55,7 @@ class McpError extends Error {
 }
 
 async function post(body, { skipSessionRetry = false } = {}) {
+  const sentGeneration = sessionGeneration
   let resp
   try {
     resp = await fetch(MCP_URL, {
@@ -64,22 +67,13 @@ async function post(body, { skipSessionRetry = false } = {}) {
     throw new McpError('无法连接后端服务，请确认网关已启动')
   }
 
-  // initialize 成功时服务端返回会话 ID，记录并用于后续请求
+  // 仅成功响应才更新会话 ID，避免错误响应里的旧会话头覆盖新会话
   const newSession = resp.headers.get('mcp-session-id')
-  if (newSession) sessionId = newSession
+  if (newSession && resp.ok) sessionId = newSession
 
   if (resp.status === 401) {
     handleUnauthorized()
     throw new McpError('登录已过期，请重新登录')
-  }
-
-  if (resp.status === 400 && sessionId && !skipSessionRetry) {
-    // 会话失效（过期/服务重启）：重置会话后重试一次
-    sessionId = null
-    initPromise = null
-    toolsCache = null
-    await ensureInitialized()
-    return post(body, { skipSessionRetry: true })
   }
 
   let data = null
@@ -92,6 +86,17 @@ async function post(body, { skipSessionRetry = false } = {}) {
     }
   }
 
+  // 会话失效（后端重启 / 会话过期）：MCP 规范返回 404 + "Session not found"，
+  // 部分实现也会用 400 + 错误码 -32600。统一重置会话并重试一次。
+  if (!skipSessionRetry && isSessionError(resp, data)) {
+    if (sentGeneration === sessionGeneration) {
+      // 本请求携带的是旧会话：重置并重新初始化
+      await recoverSession()
+    }
+    // 其他请求已完成恢复时，直接使用新会话重试
+    return post(body, { skipSessionRetry: true })
+  }
+
   if (!resp.ok) {
     const message = data?.error?.message || `请求失败（HTTP ${resp.status}）`
     throw new McpError(message, data?.error)
@@ -102,6 +107,31 @@ async function post(body, { skipSessionRetry = false } = {}) {
   }
 
   return data
+}
+
+function isSessionError(resp, data) {
+  if (!sessionId) return false
+  const message = (data?.error?.message || '').toLowerCase()
+  const code = data?.error?.code
+  if (resp.status === 404) return true
+  if (resp.status === 400 && (code === -32600 || message.includes('session'))) return true
+  return false
+}
+
+async function recoverSession() {
+  if (!recoveringPromise) {
+    recoveringPromise = (async () => {
+      // 清空会话与工具缓存，重新 initialize 拿新会话（代次 +1 标识一次恢复）
+      sessionGeneration += 1
+      sessionId = null
+      initPromise = null
+      toolsCache = null
+      await ensureInitialized()
+    })().finally(() => {
+      recoveringPromise = null
+    })
+  }
+  await recoveringPromise
 }
 
 function sendNotification(method, params = {}) {

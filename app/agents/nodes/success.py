@@ -45,17 +45,24 @@ def success_node(state: dict[str, Any]) -> dict[str, Any]:
     # ---- 1. 上传输出到 MinIO（尽力而为，失败保留本地路径供兜底下载）----
     minio_output_key = ""
     if output_file and os.path.exists(output_file):
-        try:
-            key = build_object_key(
-                task_id, base_name, modified=True
-            )  # modified_xxx.docx
-            storage.upload_file(
-                output_file, bucket=settings.minio_output_bucket, key=key
-            )
-            minio_output_key = key  # 仅上传成功才回填 Key，失败保留本地路径
-            logger.info("[success_node] 输出已上传: %s", minio_output_key)
-        except Exception as exc:
-            logger.warning("[success_node] 输出上传 MinIO 失败，保留本地路径: %s", exc)
+        for attempt in range(2):  # 失败重试一次，提升可靠性
+            try:
+                key = build_object_key(
+                    task_id, base_name, modified=True
+                )  # modified_xxx.docx
+                storage.upload_file(
+                    output_file, bucket=settings.minio_output_bucket, key=key
+                )
+                minio_output_key = key  # 仅上传成功才回填 Key，失败保留本地路径
+                logger.info("[success_node] 输出已上传: %s", minio_output_key)
+                break
+            except Exception as exc:
+                logger.warning(
+                    "[success_node] 输出上传 MinIO 失败（第 %d 次），保留本地路径: %s",
+                    attempt + 1,
+                    exc,
+                )
+                minio_output_key = ""
 
     # ---- 2. 指标计算 + MySQL 成功收尾 ----
     processing_ms = int((time.time() - started_at) * 1000)
@@ -66,7 +73,7 @@ def success_node(state: dict[str, Any]) -> dict[str, Any]:
 
         db = SessionLocal()
         try:
-            mark_success(
+            task = mark_success(
                 db,
                 task_id,
                 output_file_path=minio_output_key
@@ -75,6 +82,15 @@ def success_node(state: dict[str, Any]) -> dict[str, Any]:
                 llm_total_tokens=llm_tokens,
                 cost_usd=cost_usd,
             )
+            # 成功后才扣积分（提交时不扣；失败/取消不产生扣费）
+            if task is not None and task.user_id != 1:
+                from app.crud import users as user_crud  # 延迟导入
+
+                if not user_crud.deduct_credit(db, task.user_id, 1, action="task_consume"):
+                    logger.warning(
+                        "[success_node] 积分扣减失败（余额不足）: user=%s",
+                        task.user_id,
+                    )
         finally:
             db.close()
     except Exception as exc:  # DB 未就绪 → 仅日志

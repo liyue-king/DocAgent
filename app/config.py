@@ -77,7 +77,7 @@ class Settings(BaseSettings):
 
     # ---------------- ChromaDB（向量库） ----------------
     chroma_host: str = "localhost"  # ChromaDB 主机
-    chroma_port: int = 8000  # ChromaDB HTTP 端口
+    chroma_port: int = 8002  # ChromaDB HTTP 端口（8002 避免与本机 8000 冲突；容器内由 compose 覆盖为 8000）
     chroma_health_timeout_seconds: int = 2  # Chroma 健康检查超时
 
     # ---------------- LLM ----------------
@@ -125,11 +125,20 @@ class Settings(BaseSettings):
     alipay_user_id: str = "2088722102597409"  # 沙箱测试购买者账号ID
     alipay_query_timeout_seconds: int = 5  # 订单查询超时
 
+    # ---------------- MinerU 文档解析（知识库上传，可选） ----------------
+    mineru_api_key: str = ""  # MinerU token（未配置时知识库上传走本地正则提取）
+    mineru_base_url: str = "https://mineru.net/api/v4"  # MinerU API 基址（含 /api/v4）
+    mineru_timeout_seconds: int = 120  # 解析任务轮询总超时（秒）
+
+    # ---------------- LangGraph Checkpointer（断点持久化） ----------------
+    checkpoint_db_path: str = "checkpoints/checkpoint.db"  # SQLite checkpoint 文件（容器内挂 /app/checkpoints）
+
     # ---------------- 应用参数 ----------------
     max_file_size_mb: int = 20  # 上传文件大小上限（MB）
     task_expire_hours: int = 24  # 任务/文件生命周期（小时后自动过期删除）
     max_retry_count: int = 3  # Validator 校验失败最大重试次数
     api_rate_limit: int = 10  # IP 限流：每分钟允许的请求数
+    local_output_dir: str = "data/local_outputs"  # MinIO 失败时输出文件的本地稳定目录
     cors_allow_origins: str = "*"  # CORS 允许来源（逗号分隔或 *）
     api_client_timeout_seconds: int = 30  # API e2e 客户端超时
     api_base_url: str = "http://localhost:8001"  # API 默认基址
@@ -144,6 +153,11 @@ class Settings(BaseSettings):
             f"mysql+pymysql://{quote_plus(self.mysql_user)}:{quote_plus(self.mysql_password)}"
             f"@{self.mysql_host}:{self.mysql_port}/{self.mysql_database}?charset=utf8mb4"
         )
+
+    @property
+    def local_output_dir_abs(self) -> str:
+        """本地输出稳定目录的绝对路径（相对项目根目录解析）。"""
+        return str(_PROJECT_ROOT / self.local_output_dir)
 
 
 @lru_cache  # 缓存函数结果：整个进程生命周期内只解析一次 .env，提升性能

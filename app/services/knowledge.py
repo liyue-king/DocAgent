@@ -107,6 +107,20 @@ def _get_user_collection() -> Any:
     return _user_collection
 
 
+def _reset_user_collection() -> None:
+    """清空用户知识库集合缓存（集合被删除/重建后重新获取）。"""
+    global _user_collection
+    _user_collection = None
+
+
+def _safe_count(collection: Any, label: str) -> int:
+    """安全获取集合数量：Chroma 集合被删除/连接异常时统一转 KnowledgeUnavailable。"""
+    try:
+        return collection.count()
+    except Exception as exc:
+        raise KnowledgeUnavailable(f"{label}不可用: {exc}") from exc
+
+
 def chunk_text(text: str, chunk_size: int = _CHUNK_SIZE, overlap: int = 100) -> list[str]:
     """文档切块：按段落聚合，超长段落按句切，块间保留重叠保证上下文连续。
 
@@ -330,6 +344,7 @@ def search_user(query: str, user_id: int, top_k: int = 5) -> list[dict[str, Any]
     try:
         count_result = collection.get(where={"user_id": user_id}, include=[])
     except Exception as exc:
+        _reset_user_collection()  # 集合可能已被删除，下次重新获取
         raise KnowledgeUnavailable(f"用户知识库查询失败: {exc}") from exc
     if not count_result.get("ids"):
         return []
@@ -344,6 +359,7 @@ def search_user(query: str, user_id: int, top_k: int = 5) -> list[dict[str, Any]
     except KnowledgeUnavailable:
         raise
     except Exception as exc:
+        _reset_user_collection()
         raise KnowledgeUnavailable(f"用户知识库检索失败: {exc}") from exc
 
     hits: list[dict[str, Any]] = []
@@ -389,13 +405,18 @@ def delete_user_document(user_id: int, doc_id: str) -> int:
     except KnowledgeUnavailable:
         raise
     except Exception as exc:
+        _reset_user_collection()
         raise KnowledgeUnavailable(f"用户知识库删除失败: {exc}") from exc
 
 
 def count_user_chunks(user_id: int) -> int:
     """统计用户知识库的片段总数（供“我的知识库”统计展示）。"""
     collection = _get_user_collection()
-    count_result = collection.get(where={"user_id": user_id}, include=[])
+    try:
+        count_result = collection.get(where={"user_id": user_id}, include=[])
+    except Exception as exc:
+        _reset_user_collection()
+        raise KnowledgeUnavailable(f"用户知识库统计失败: {exc}") from exc
     return len(count_result.get("ids") or [])
 
 
@@ -408,7 +429,7 @@ def search(query: str, top_k: int = 5) -> list[dict[str, Any]]:
     :raises KnowledgeUnavailable: 向量库/模型不可用
     """
     collection = _get_collection()
-    count = collection.count()
+    count = _safe_count(collection, "平台知识库")
     if count == 0:
         return []
     try:
@@ -445,7 +466,11 @@ def search_templates(query: str, top_k: int = 3) -> list[dict[str, Any]]:
     collection = _get_template_collection()
     if collection is None:
         return []
-    count = collection.count()
+    try:
+        count = collection.count()
+    except Exception as exc:  # 模板集合不可用 → 返回空（不影响主检索）
+        logger.warning("[knowledge] 模板集合计数失败: %s", exc)
+        return []
     if count == 0:
         return []
     try:
@@ -478,10 +503,13 @@ def search_templates(query: str, top_k: int = 3) -> list[dict[str, Any]]:
 def stats() -> dict[str, Any]:
     """知识库统计：总片段数 + 按分类分布。"""
     collection = _get_collection()
-    total = collection.count()
+    total = _safe_count(collection, "平台知识库")
     categories: dict[str, int] = {}
     if total:
-        metas = collection.get(include=["metadatas"])["metadatas"] or []
+        try:
+            metas = collection.get(include=["metadatas"])["metadatas"] or []
+        except Exception as exc:
+            raise KnowledgeUnavailable(f"平台知识库统计失败: {exc}") from exc
         categories = dict(
             Counter(m.get("category", "其他") for m in metas if m)
         )

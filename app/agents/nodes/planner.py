@@ -23,7 +23,7 @@ import json  # 序列化提示词
 import logging  # 标准库日志
 from typing import Any  # 泛型类型
 
-from app.agents.nodes._common import notify  # 日志 + 持久化
+from app.agents.nodes._common import is_cancelled, notify  # 取消判定 / 日志持久化
 from app.models import LogLevel, TaskStatus  # 枚举
 
 logger = logging.getLogger(__name__)  # 模块级日志器
@@ -135,6 +135,9 @@ def build_style_ops(
     style_group: dict[str, list[int]] = {}
     for p in doc_dom_serial.get("paragraphs", []):
         s = p.get("style", "other")
+        # 正文样式但原本带加粗的段落（封面字段/强调）→ 保留原格式，模板不覆盖
+        if s == "normal" and p.get("keep_format"):
+            continue
         if s in ("heading_1", "heading_2", "heading_3", "normal"):
             style_group.setdefault(s, []).append(p["id"])
 
@@ -268,6 +271,10 @@ def planner_node(state: dict[str, Any]) -> dict[str, Any]:
     :param state: 当前状态（含模板配置 / doc_dom_serial / 用户需求 / 校验报告）
     :return: 状态更新（task_queue / planner_mode / token 统计 / agent_logs / status）
     """
+    # 取消检查：LLM 增量路径耗时较长，取消后提前退出（error_node 收尾）
+    if is_cancelled(state.get("task_id", "")):
+        return {"status": "cancelled", "error_message": "任务已取消"}
+
     template_config = state.get("selected_template_config") or {}
     doc_dom_serial = state.get("doc_dom_serial") or {"paragraphs": []}
     user_prompt = state.get("user_prompt", "")

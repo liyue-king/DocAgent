@@ -43,24 +43,37 @@ def error_node(state: dict[str, Any]) -> dict[str, Any]:
     # ---- 1. 尽力保留最后一次修改结果至 MinIO ----
     minio_key = ""
     if output_file and os.path.exists(output_file):
-        try:
-            key = build_object_key(task_id, base_name, modified=True)
-            storage.upload_file(
-                output_file, bucket=settings.minio_output_bucket, key=key
-            )
-            minio_key = key  # 仅上传成功才回填 Key，失败保留本地路径
-            logger.info("[error_node] 失败结果已保留至 MinIO: %s", minio_key)
-        except Exception as exc:
-            logger.warning("[error_node] 失败结果上传 MinIO 失败: %s", exc)
+        for attempt in range(2):  # 失败重试一次，提升可靠性
+            try:
+                key = build_object_key(task_id, base_name, modified=True)
+                storage.upload_file(
+                    output_file, bucket=settings.minio_output_bucket, key=key
+                )
+                minio_key = key  # 仅上传成功才回填 Key，失败保留本地路径
+                logger.info("[error_node] 失败结果已保留至 MinIO: %s", minio_key)
+                break
+            except Exception as exc:
+                logger.warning(
+                    "[error_node] 失败结果上传 MinIO 失败（第 %d 次）: %s",
+                    attempt + 1,
+                    exc,
+                )
+                minio_key = ""
 
     # ---- 2. 更新 MySQL failed（回填输出路径便于兜底下载）----
+    # 终态守卫：用户已取消（status=cancelled）→ 不覆盖终态，仅保留输出路径
+    cancelled = False
     try:
-        from app.crud.tasks import mark_failed, update_task  # 延迟导入
+        from app.crud.tasks import get_task, mark_failed, update_task  # 延迟导入
         from app.db import SessionLocal
 
         db = SessionLocal()
         try:
-            mark_failed(db, task_id)
+            current = get_task(db, task_id)
+            if current is not None and current.status == TaskStatus.CANCELLED:
+                cancelled = True
+            if not cancelled:
+                mark_failed(db, task_id)
             if minio_key or output_file:
                 update_task(db, task_id, output_file_path=minio_key or output_file)
         finally:
@@ -68,14 +81,15 @@ def error_node(state: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:  # DB 未就绪 → 仅日志
         logger.warning("[error_node] MySQL 失败收尾失败: %s", exc)
 
+    # 取消场景：status 传 None → _persist 不写 tasks.status，DB 保持 cancelled
     logs = notify(
         state,
-        f"处理失败：{error_msg}",
+        f"任务已取消：{error_msg}" if cancelled else f"处理失败：{error_msg}",
         NODE_NAME,
-        level=LogLevel.ERROR,
-        status=TaskStatus.FAILED,
-        progress=100,
-        step="处理失败",
+        level=LogLevel.WARNING if cancelled else LogLevel.ERROR,
+        status=None if cancelled else TaskStatus.FAILED,
+        progress=None if cancelled else 100,
+        step=None if cancelled else "处理失败",
     )
     return {
         "agent_logs": logs,

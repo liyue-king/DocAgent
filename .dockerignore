@@ -1,0 +1,22 @@
+# 依赖与构建产物
+.venv/
+__pycache__/
+*.pyc
+node_modules/
+frontend/node_modules/
+frontend/dist/
+
+# 环境与密钥（绝不进镜像）
+.env
+keys/*.pem
+
+# 数据与日志
+data/
+logs/
+checkpoints/
+
+# Git 与 IDE
+.git/
+.idea/
+.vscode/
+*.drawio

@@ -69,6 +69,17 @@ def serialize_user(user: User) -> dict[str, Any]:
     }
 
 
+def serialize_credit_log(log: object) -> dict[str, Any]:
+    """积分流水脱敏序列化（个人中心「积分明细」展示）。"""
+    return {
+        "id": log.id,
+        "amount": log.amount,
+        "balance_after": log.balance_after,
+        "action": log.action,
+        "created_at": log.created_at.isoformat() if log.created_at else None,
+    }
+
+
 def _get_token(request: Request) -> str | None:
     """从 Authorization: Bearer xxx 头提取 token。"""
     header = request.headers.get("Authorization", "")
@@ -95,6 +106,9 @@ def get_current_user(
         raise AuthError("用户不存在，请重新登录", code=1105)
     if not user.is_active:
         raise AuthError("账号已被禁用，请联系管理员", code=1106)
+    # tv 版本号校验：改密/改邮箱后旧 token 立即失效
+    if int(payload.get("tv", 0)) != (user.token_version or 0):
+        raise AuthError("登录状态已失效，请重新登录", code=1105)
     return user
 
 
@@ -125,15 +139,18 @@ def get_current_admin(
 
 
 def _sync_admin_flag(db: Session, user: User) -> None:
-    """按配置的管理员邮箱自动授予/收回管理员标记（幂等）。"""
+    """按配置的管理员邮箱自动授予管理员标记（幂等）。
+
+    只自动提升、不自动撤销：管理员在后台手动授权的账号不会被
+    下一次登录时收回，避免「用户管理」中设置的权限失效。
+    """
     admins = {
         email.strip().lower()
         for email in settings.admin_emails.split(",")
         if email.strip()
     }
-    is_admin = bool(user.email and user.email.lower() in admins)
-    if bool(user.is_admin) != is_admin:
-        user.is_admin = is_admin
+    if user.email and user.email.lower() in admins and not user.is_admin:
+        user.is_admin = True
         db.commit()
         db.refresh(user)
 
@@ -199,7 +216,7 @@ def register(
         db.rollback()
         return _err(1103, "该邮箱已被注册，请直接登录")
     _sync_admin_flag(db, user)  # 管理员邮箱注册时直接授予权限
-    token = create_token(user.id, user.email)  # 注册即登录
+    token = create_token(user.id, user.email, token_version=user.token_version)  # 注册即登录
     return _ok(token=token, user=serialize_user(user), msg="注册成功")
 
 
@@ -218,17 +235,112 @@ def login(
     if not user.is_active:
         return _err(1106, "账号已被禁用，请联系管理员")
     _sync_admin_flag(db, user)  # 管理员邮箱登录时同步权限
-    token = create_token(user.id, user.email)
+    token = create_token(user.id, user.email, token_version=user.token_version)
     return _ok(token=token, user=serialize_user(user), msg="登录成功")
 
 
 @router.get("/me")
-def me(user: Annotated[User, Depends(get_current_user)]) -> dict[str, Any]:
-    """当前登录用户信息（含积分余额，前端导航展示）。"""
-    return _ok(user=serialize_user(user))
+def me(
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)] = None,
+) -> dict[str, Any]:
+    """当前登录用户信息（含积分余额 + 最近 10 条积分明细）。"""
+    logs = user_crud.list_credit_logs(db, user.id, limit=10)  # 最近明细
+    return _ok(
+        user=serialize_user(user),
+        credit_logs=[serialize_credit_log(log) for log in logs],
+    )
+
+
+class ChangePasswordBody(BaseModel):
+    """修改密码请求体（旧密码 + 新密码）。"""
+
+    old_password: str = Field(..., description="当前密码")
+    new_password: str = Field(..., min_length=6, max_length=64, description="新密码（6-64位）")
+
+
+class ChangeEmailBody(BaseModel):
+    """修改邮箱请求体（新邮箱 + 验证码）。"""
+
+    email: str = Field(..., description="新邮箱")
+    code: str = Field(..., min_length=6, max_length=6, description="邮箱验证码")
+
+
+class ResetPasswordBody(BaseModel):
+    """忘记密码重置请求体（邮箱 + 验证码 + 新密码）。"""
+
+    email: str = Field(..., description="注册邮箱")
+    code: str = Field(..., min_length=6, max_length=6, description="邮箱验证码")
+    password: str = Field(..., min_length=6, max_length=64, description="新密码（6-64位）")
+
+
+@router.post("/change-password")
+def change_password(
+    body: ChangePasswordBody,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)] = None,
+) -> dict[str, Any]:
+    """修改密码：校验旧密码 → 更新哈希 + token_version+1 → 签发新 token。"""
+    if not verify_password(body.old_password, user.password_hash):
+        return _err(1104, "原密码不正确")
+    user.password_hash = hash_password(body.new_password)
+    user.token_version = (user.token_version or 0) + 1  # 旧 token 全部失效
+    db.commit()
+    db.refresh(user)
+    token = create_token(user.id, user.email, token_version=user.token_version)
+    return _ok(token=token, msg="密码修改成功")
+
+
+@router.post("/change-email")
+def change_email(
+    body: ChangeEmailBody,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)] = None,
+) -> dict[str, Any]:
+    """修改邮箱：验证码校验 → 新邮箱唯一 → 更新 + token_version+1 → 签发新 token。"""
+    if not _valid_email(body.email):
+        return _err(1001, "参数错误：邮箱格式不正确")
+    new_email = body.email.lower()
+    # ---- 1. 验证码校验（发给新邮箱）----
+    if not email_code.verify_code(new_email, body.code):
+        return _err(1101, "验证码错误或已过期，请重新获取")
+    # ---- 2. 新邮箱唯一性（排除自己）----
+    existed = user_crud.get_by_email(db, new_email)
+    if existed is not None and existed.id != user.id:
+        return _err(1103, "该邮箱已被注册")
+    # ---- 3. 更新邮箱 + 版本号 + 管理员标记 ----
+    user.email = new_email
+    user.token_version = (user.token_version or 0) + 1  # 旧 token 全部失效
+    db.commit()
+    db.refresh(user)
+    _sync_admin_flag(db, user)  # 新邮箱可能命中管理员配置
+    token = create_token(user.id, user.email, token_version=user.token_version)
+    return _ok(token=token, user=serialize_user(user), msg="邮箱修改成功")
 
 
 @router.post("/logout")
 def logout() -> dict[str, Any]:
     """无状态登出：JWT 无服务端状态，前端清除本地 token 即可。"""
     return _ok(msg="已退出登录")
+
+
+@router.post("/reset")
+def reset_password(
+    body: ResetPasswordBody, db: Annotated[Session, Depends(get_db)] = None
+) -> dict[str, Any]:
+    """忘记密码重置：验证码校验 → 更新密码 + token_version+1（旧 token 全部失效）。"""
+    if not _valid_email(body.email):
+        return _err(1001, "参数错误：邮箱格式不正确")
+    email = body.email.lower()
+    # ---- 1. 验证码校验 ----
+    if not email_code.verify_code(email, body.code):
+        return _err(1101, "验证码错误或已过期，请重新获取")
+    # ---- 2. 用户存在性 ----
+    user = user_crud.get_by_email(db, email)
+    if user is None:
+        return _err(1104, "该邮箱未注册")  # 不泄露信息，但需明确提示
+    # ---- 3. 更新密码 + 版本号 ----
+    user.password_hash = hash_password(body.password)
+    user.token_version = (user.token_version or 0) + 1  # 重置后所有旧 token 失效
+    db.commit()
+    return _ok(msg="密码重置成功，请使用新密码登录")
