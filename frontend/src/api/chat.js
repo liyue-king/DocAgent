@@ -1,12 +1,12 @@
 import client from './client'
-import { callTool } from './mcp'
 
 export function sendChat(message) {
-  return callTool('chat_api_v1_chat_post', { message })
+  // LLM 生成最长 60s（后端 timeout=60 + 重试 1 次），必须覆盖 axios 全局 30s 默认值
+  return client.post('/chat', { message }, { timeout: 120000 })
 }
 
 export function getChatHistory(limit = 100) {
-  return callTool('chat_history_api_v1_chat_history_get', { limit })
+  return client.get('/chat/history', { params: { limit } })
 }
 
 export function uploadKnowledge(formData) {
@@ -18,15 +18,15 @@ export function uploadKnowledge(formData) {
 }
 
 export function getKnowledgeStats() {
-  return callTool('my_knowledge_stats_api_v1_knowledge_stats_get', {})
+  return client.get('/knowledge/stats')
 }
 
 export function listKnowledgeDocs() {
-  return callTool('list_my_docs_api_v1_knowledge_get', {})
+  return client.get('/knowledge')
 }
 
 export function deleteKnowledgeDoc(docId) {
-  return callTool('delete_my_doc_api_v1_knowledge__doc_id__delete', { doc_id: docId })
+  return client.delete(`/knowledge/${docId}`)
 }
 
 // ---- 平台知识库（仅管理员，RAG）----
@@ -38,5 +38,5 @@ export function uploadAdminKnowledge(formData) {
 }
 
 export function getAdminKnowledgeStats() {
-  return callTool('knowledge_stats_api_v1_rag_stats_get', {})
+  return client.get('/rag/stats')
 }

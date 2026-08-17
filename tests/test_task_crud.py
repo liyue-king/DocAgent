@@ -45,6 +45,22 @@ def test_update_task_whitelist(db_session) -> None:
     assert not hasattr(task, "not_a_column")
 
 
+def test_update_task_terminal_guard(db_session) -> None:
+    """终态守卫：用户取消落库后，worker 遗留的非终态写入不得覆盖 CANCELLED。"""
+    tid = _tid()
+    _create(db_session, tid)
+    crud.mark_cancelled(db_session, tid)
+    # 模拟 worker 的 notify 遗留写入（retrieving/planning/executing...）
+    crud.update_task(db_session, tid, status=TaskStatus.EXECUTING, progress=60)
+    task = crud.get_task(db_session, tid)
+    assert task.status == TaskStatus.CANCELLED  # 状态未被覆盖
+    assert task.progress == 60  # 非状态字段仍可写入
+    # 终态 → 终态（mark_failed 等）仍被允许（error_node 主动落 cancelled 不冲突）
+    crud.mark_failed(db_session, tid)
+    task = crud.get_task(db_session, tid)
+    assert task.status == TaskStatus.FAILED
+
+
 def test_status_transitions(db_session) -> None:
     """pending → started → executing → success 全链路。"""
     tid = _tid()

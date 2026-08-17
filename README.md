@@ -11,7 +11,6 @@
 - **实时进度**：SSE 实时推送 + Redis 快照降级轮询
 - **账户体系**：邮箱验证码注册/登录、JWT、积分扣费、支付宝沙箱支付、管理员后台
 - **个人知识库**：上传文档（支持 MinerU 解析，含图片提取）→ 切块向量化 → 隔离检索
-- **MCP 暴露**：全部 API 以 MCP 工具形式暴露（`/mcp`），前端/AI 客户端可直接调用
 
 ## 技术栈
 
@@ -29,9 +28,8 @@
 ## 架构总览
 
 ```
-浏览器 ── Vue3 (5173) ──┬── /api/v1/* ──┐
-                        │                │
-                        └── /mcp (MCP) ──┤
+浏览器 ── Vue3 (5173) ── /api/v1/* ──┐
+                                      │
                        FastAPI 网关 (8001) ── MySQL / Redis / MinIO
                               │ 投递任务
                         Celery Worker ── LangGraph 编排图
@@ -79,6 +77,10 @@ uv run celery -A app.celery_app worker -P solo --loglevel=info   # Worker（Wind
 uv run celery -A app.celery_app beat --loglevel=info             # Beat（过期任务清扫）
 ```
 
+> 开发态偷懒方案（IDEA 直跑 uvicorn）：在 `.env` 设 `AUTO_START_WORKER=true`、
+> `AUTO_START_BEAT=true`，Worker/Beat 会随网关自动拉起、停止时自动回收，
+> 日志在 `logs/celery_worker.log` / `logs/celery_beat.log`，免开终端（仅限本地，Docker 保持 false）。
+
 ### 5. 启动前端
 
 ```bash
@@ -99,7 +101,7 @@ curl http://localhost:8001/api/v1/health   # {"status":"ok","services":{...}}
 docker compose -f docker-compose.prod.yml up --build
 ```
 
-构建后端镜像（web/worker/beat 三进程）+ 前端 nginx（80/443 HTTPS，反代 /api、/mcp），
+构建后端镜像（web/worker/beat 三进程）+ 前端 nginx（80/443 HTTPS，反代 /api），
 MinerU 模型缓存挂卷，MySQL 每日自动备份到 `./data/backup`。
 
 ## 环境变量配置表
@@ -130,8 +132,6 @@ MinerU 模型缓存挂卷，MySQL 每日自动备份到 `./data/backup`。
 | `/tasks` | GET | 我的任务列表（登录） |
 
 其他模块：`/auth/*`（注册/登录/验证码/改密）、`/chat` + `/rag/*`、`/knowledge/*`、`/pay/*`、`/templates/*`。
-
-**MCP**：`POST http://localhost:8001/mcp`（Streamable HTTP），JSON-RPC `initialize → tools/list → tools/call`；文件上传/下载类接口不走 MCP。
 
 ## 测试
 

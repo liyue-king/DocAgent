@@ -31,14 +31,13 @@ import logging  # 标准库日志
 import os  # 本地输出路径判断
 import time  # SSE 心跳计时
 import uuid  # 任务 UUID 生成
-from urllib.parse import quote  # 下载文件名 URL 编码
 from typing import Annotated, Any  # 泛型类型 / FastAPI 依赖注入标注
+from urllib.parse import quote  # 下载文件名 URL 编码
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import (
     FileResponse,
     JSONResponse,
-    RedirectResponse,
     Response,
     StreamingResponse,  # SSE 实时推送
 )
@@ -164,7 +163,7 @@ def process_upload(
     # ---- 4. 写 MySQL（pending）----
     try:
         from app.crud.tasks import create_task
-        from app.crud.users import deduct_credit, get_or_create_anonymous
+        from app.crud.users import get_or_create_anonymous
 
         owner = user or get_or_create_anonymous(db)  # 登录用户优先，游客走匿名
         # 登录用户提交任务前校验额度（游客 999 次不受影响）
@@ -312,6 +311,13 @@ def stream_task_status(
         yield "retry: 3000\n\n"
         while True:
             try:
+                # 关键：每轮迭代先结束当前事务。请求级会话在 MySQL REPEATABLE
+                # READ 下首轮 SELECT 即建立快照，且 SQLAlchemy identity map 复用
+                # 同一对象 —— 不重置事务的话，task 的 output_file_path/retry_count/
+                # agent_state_snapshot 永远停在首轮状态，终态帧 download_url 恒为
+                # None（前端必须刷新页面重新请求才能下载）。rollback 后下一轮
+                # SELECT 开启新事务、拿到新快照，行为等同每次新查询。
+                db.rollback()
                 task = get_task(db, task_id)
                 if task is None:  # 任务不存在/已过期 → 错误帧后关闭
                     yield _sse_event("error", {"code": 2001, "msg": "任务不存在或已过期"})
@@ -422,15 +428,10 @@ def cancel_task(
     if task.status in _TERMINAL_STATUS:
         return _err(2002, "任务已结束，无法取消")
 
-    # ---- 1. Celery revoke（未投递任务直接移除；运行中任务靠标志位）----
-    try:
-        from app.celery_app import celery_app  # 延迟导入避免循环
-
-        celery_app.control.revoke(task_id, terminate=False)
-    except Exception as exc:  # broker 不可用 → 标志位兜底，不阻塞取消
-        logger.warning("[cancel] revoke 失败(不影响取消): %s", exc)
-
-    # ---- 2. 取消标志（Redis 供节点轮询，MySQL 供降级判定与前端展示）----
+    # ---- 1. 取消标志（Redis 供节点轮询，MySQL 供降级判定与前端展示）----
+    # 先写标志再 revoke：取消响应不被 broker 广播阻塞（solo worker 下
+    # revoke 广播要等当前任务跑完才能被消费，放前面会让 DB 的 cancelled
+    # 延迟数秒提交，扩大 error_node 读到"运行中"的竞态窗口）
     task_cache.set_cancelled_flag(task_id)
     mark_cancelled(db, task_id)
     add_log(
@@ -440,6 +441,15 @@ def cancel_task(
         message="用户请求取消任务",
         level=LogLevel.INFO,
     )
+
+    # ---- 2. Celery revoke（未投递任务直接移除；运行中任务靠标志位）----
+    try:
+        from app.celery_app import celery_app  # 延迟导入避免循环
+
+        celery_app.control.revoke(task_id, terminate=False, reply=False)
+    except Exception as exc:  # broker 不可用 → 标志位兜底，不阻塞取消
+        logger.warning("[cancel] revoke 失败(不影响取消): %s", exc)
+
     return _ok(msg="任务已取消")
 
 
@@ -470,8 +480,9 @@ def download_result(
     if os.path.exists(task.output_file_path):
         # 顺带把本地兜底文件补传 MinIO，避免重启/清理后丢失（失败不影响本次下载）
         try:
-            from app.crud.tasks import update_task  # 延迟导入
             from datetime import datetime
+
+            from app.crud.tasks import update_task  # 延迟导入
 
             key = (
                 f"{datetime.now():%Y/%m/%d}/{task.id}/"

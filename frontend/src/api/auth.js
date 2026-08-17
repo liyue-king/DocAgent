@@ -1,36 +1,36 @@
-import { callTool } from './mcp'
+import client from './client'
 
 export function sendEmailCode(email) {
-  return callTool('send_email_code_api_v1_auth_code_post', { email })
+  return client.post('/auth/code', { email })
 }
 
 export function login(data) {
-  return callTool('login_api_v1_auth_login_post', data)
+  return client.post('/auth/login', data)
 }
 
 export function register(data) {
-  return callTool('register_api_v1_auth_register_post', data)
+  return client.post('/auth/register', data)
 }
 
 export function getCurrentUser() {
-  return callTool('me_api_v1_auth_me_get', {})
+  return client.get('/auth/me')
 }
 
 export function logout() {
-  return callTool('logout_api_v1_auth_logout_post', {})
+  return client.post('/auth/logout')
 }
 
 export function changePassword(oldPassword, newPassword) {
-  return callTool('change_password_api_v1_auth_change_password_post', {
+  return client.post('/auth/change-password', {
     old_password: oldPassword,
     new_password: newPassword,
   })
 }
 
 export function changeEmail(email, code) {
-  return callTool('change_email_api_v1_auth_change_email_post', { email, code })
+  return client.post('/auth/change-email', { email, code })
 }
 
 export function resetPassword(email, code, password) {
-  return callTool('reset_password_api_v1_auth_reset_post', { email, code, password })
+  return client.post('/auth/reset', { email, code, password })
 }

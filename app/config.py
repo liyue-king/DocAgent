@@ -98,6 +98,9 @@ class Settings(BaseSettings):
     celery_soft_time_limit_seconds: int = 240  # 软超时
     celery_time_limit_seconds: int = 300  # 硬超时
     celery_beat_sweep_interval_seconds: int = 3600  # 过期清扫周期
+    # 开发态：随 API 网关自动拉起 Celery（IDEA 直跑 uvicorn 免开终端）
+    auto_start_worker: bool = False  # 网关启动时自动拉起 worker（Docker 部署保持 False）
+    auto_start_beat: bool = False  # 网关启动时自动拉起 beat（过期任务周期清扫）
 
     # ---------------- 登录认证（JWT） ----------------
     jwt_secret: str = "dev-secret-change-me"  # JWT 签名密钥（生产必须更换）

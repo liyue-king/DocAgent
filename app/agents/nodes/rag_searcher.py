@@ -39,7 +39,8 @@ _seeds_cache: list[dict[str, Any]] | None = None  # 种子模板缓存
 
 _PROMPT_TEMPLATE_PATTERNS = [
     re.compile(r"[「『]([^」』]{1,40})[」』]"),
-    re.compile(r"按\s*[「『]?([^，。；\s]{2,30}?模板)[」』]?"),
+    # "按学术论文模板排版" / "按学术论文格式排版" 均能提取（不再强制要求"模板"二字）
+    re.compile(r"按\s*[「『]?([^，。；\s]{2,30}?)(?:模板|格式)[」』]?"),
 ]
 
 
@@ -65,14 +66,14 @@ def _get_retriever() -> Any:
     return _retriever
 
 
-def _resolve_template(
-    template_name: str, seed_index: int | None
-) -> tuple[int | None, dict[str, Any]]:
-    """解析模板主键与配置：优先按名称查 MySQL，兜底按种子索引映射。
+def _resolve_seed_template(
+    seed: dict[str, Any], seed_index: int
+) -> tuple[int | None, dict[str, Any], str]:
+    """解析种子模板为 (template_id, config, name)：MySQL 按名优先，种子兜底。
 
-    :param template_name: 模板名称（如"学术论文"）
+    :param seed: 种子模板 dict（含 name/config/category）
     :param seed_index: 种子列表索引（0-based，对应 tmpl_001 起点）
-    :return: (template_id, config)；都不可得时返回 (None, {})
+    :return: (template_id, config, name)；MySQL 不可得时 template_id=None
     """
     try:  # 优先 MySQL（业务主数据源）
         from app.crud.templates import get_by_name  # 延迟导入
@@ -80,20 +81,16 @@ def _resolve_template(
 
         db = SessionLocal()
         try:
-            tpl = get_by_name(db, template_name)
+            tpl = get_by_name(db, seed["name"])
             if tpl is not None:
-                return tpl.id, tpl.config
+                return tpl.id, tpl.config, tpl.name
         finally:
             db.close()
-    except Exception as exc:  # DB 未就绪 → 走种子兜底
+    except Exception as exc:  # DB 未就绪 → 种子兜底
         logger.warning("[rag_searcher] 模板查库失败，改用种子配置: %s", exc)
-
     # 种子兜底：仅回退 config；template_id 返回 None（DB 无对应记录时
     # 回填不存在的 id 会触发外键违约，宁缺毋假）。
-    seeds = _load_seeds()
-    if seed_index is not None and 0 <= seed_index < len(seeds):
-        return None, seeds[seed_index]["config"]
-    return None, {}
+    return None, seed["config"], seed["name"]
 
 
 def _default_template() -> tuple[int | None, dict[str, Any], str]:
@@ -101,8 +98,7 @@ def _default_template() -> tuple[int | None, dict[str, Any], str]:
     seeds = _load_seeds()
     for idx, seed in enumerate(seeds):
         if seed.get("category") == "default":
-            tpl_id, config = _resolve_template(seed["name"], idx)
-            return tpl_id, config, seed["name"]
+            return _resolve_seed_template(seed, idx)
     return None, {}, "通用标准模板"
 
 
@@ -113,6 +109,8 @@ def _extract_prompt_template_name(prompt: str) -> str:
         if m:
             name = m.group(1).strip()
             if name.endswith("模板") and name != "模板":
+                name = name[:-2]
+            if name.endswith("格式") and name != "格式":
                 name = name[:-2]
             return name
     return ""
@@ -158,12 +156,15 @@ def rag_searcher_node(state: dict[str, Any]) -> dict[str, Any]:
     try:
         retriever = _get_retriever()
         result = retriever.search(prompt)  # 混合检索
+        # 检索结果已含全量竞争池选出的冠军（vector_id 对齐 MySQL 主键）：
+        # template_id / config / template_name 直接取自冠军记录，不再按名回查
         template_name = result["template_name"]
         confidence_level = result["confidence_level"]
         vector_score = result["vector_score"]
+        tpl_id = result.get("template_id")
+        config = result.get("config") or {}
 
         if confidence_level == "high":
-            tpl_id, config = _resolve_template(template_name, result["template_index"])
             logs = notify(
                 state,
                 f"模板检索命中：『{template_name}』（相似度 {vector_score:.2f}）",
@@ -175,7 +176,6 @@ def rag_searcher_node(state: dict[str, Any]) -> dict[str, Any]:
                 template_id=tpl_id,  # 回填任务命中模板
             )
         elif confidence_level == "medium":
-            tpl_id, config = _resolve_template(template_name, result["template_index"])
             logs = notify(
                 state,
                 f"模板检索命中：『{template_name}』（相似度 {vector_score:.2f}，匹配度一般）",

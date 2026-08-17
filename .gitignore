@@ -50,6 +50,9 @@ chroma_data/
 logs/
 *.log
 
+# ----- Celery beat 调度器运行时文件 -----
+celerybeat-schedule*
+
 # ----- 前端 (Vue3 + Vite) -----
 node_modules/
 frontend/dist/

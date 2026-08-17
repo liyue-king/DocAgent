@@ -80,8 +80,23 @@ def get_task(db: Session, task_id: str) -> Task | None:
     return db.get(Task, task_id)  # 主键查询
 
 
+# 终态集合：任何后续写入都不得把它们覆盖回运行态（用户取消/成功/失败/过期）
+_TERMINAL_STATUSES = {
+    TaskStatus.SUCCESS,
+    TaskStatus.FAILED,
+    TaskStatus.EXPIRED,
+    TaskStatus.CANCELLED,
+}
+
+
 def update_task(db: Session, task_id: str, **fields: Any) -> Task | None:
     """通用字段更新（status/progress/current_step/template_id/retry_count 等）。
+
+    **终态守卫**：若目标行已处于终态（success/failed/expired/cancelled），
+    则本次写入的 status 字段被忽略（仅当新状态同为终态才允许）。
+    解决 cancel 竞态：用户取消落库后，worker 的遗留 notify（retrieving/
+    planning/executing…）不得把 CANCELLED 覆盖回运行态，否则 error_node 的
+    终态守卫会读到"运行中"而误写 FAILED。
 
     :param db: 数据库会话
     :param task_id: 任务 UUID
@@ -91,6 +106,15 @@ def update_task(db: Session, task_id: str, **fields: Any) -> Task | None:
     task = db.get(Task, task_id)  # 查询任务
     if task is None:  # 任务不存在
         return None  # 直接返回
+    # 终态守卫：非终态新状态不得覆盖已终态行（CANCELLED 由用户取消产生，
+    # 一旦写入就应保持；expired 由清扫产生，同理）
+    if "status" in fields and fields["status"] is not None:
+        new_status = fields["status"]
+        if (
+            task.status in _TERMINAL_STATUSES
+            and new_status not in _TERMINAL_STATUSES
+        ):
+            del fields["status"]
     # 白名单校验：只允许更新“真实的表列”，排除 relationship 等非列属性，防止误传污染关系
     allowed = Task.__table__.columns.keys()  # 表列名集合（status/progress/...）
     for key, value in fields.items():  # 遍历待更新字段

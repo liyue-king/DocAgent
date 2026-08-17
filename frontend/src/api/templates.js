@@ -1,7 +1,7 @@
-import { callTool } from './mcp'
+import client from './client'
 
 export function getTemplates() {
-  return callTool('list_templates_api_v1_templates_get', {})
+  return client.get('/templates')
 }
 
 export async function getTemplate(id) {
@@ -13,22 +13,17 @@ export async function getTemplate(id) {
 }
 
 export function recommendTemplates(query, topK = 3) {
-  return callTool('recommend_api_v1_templates_recommend_post', { query, top_k: topK })
+  return client.post('/templates/recommend', { query, top_k: topK })
 }
 
 export function createTemplate(data) {
-  return callTool('create_template_api_v1_templates_post', data)
+  return client.post('/templates', data)
 }
 
 export function updateTemplate(templateId, data) {
-  return callTool('update_template_api_v1_templates__template_id__put', {
-    template_id: templateId,
-    ...data,
-  })
+  return client.put(`/templates/${templateId}`, data)
 }
 
 export function deleteTemplate(templateId) {
-  return callTool('delete_template_api_v1_templates__template_id__delete', {
-    template_id: templateId,
-  })
+  return client.delete(`/templates/${templateId}`)
 }

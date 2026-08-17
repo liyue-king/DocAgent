@@ -32,19 +32,6 @@ from typing import Any  # 泛型类型
 from langgraph.checkpoint.sqlite import SqliteSaver  # 断点持久化
 from langgraph.graph import END, START, StateGraph  # LangGraph 图构建
 
-from app.agents.nodes import (  # 节点与条件路由
-    entry_guard_node,
-    error_node,
-    executor_node,
-    planner_node,
-    rag_searcher_node,
-    route_after_executor,
-    route_after_guard,
-    route_after_validator,
-    success_node,
-    supervisor_node,
-    validator_node,
-)
 from app.agents.state import DocAgentState  # 状态模式
 
 # 节点名常量（与蓝图 6.2 对齐）
@@ -69,6 +56,10 @@ _checkpointer: SqliteSaver | None = None  # 进程内单例（worker 长驻复�
 def get_checkpointer() -> SqliteSaver:
     """获取 SqliteSaver 单例：SQLite 连接在整个 Worker 进程生命周期内复用。
 
+    说明：部署形态为 solo worker（Windows -P solo / 单进程），单连接单线程
+    复用安全；若切换 prefork/多线程并发，需改为每进程/每线程独立连接
+    （LangGraph SqliteSaver 非线程安全，共享连接存在竞态风险）。
+
     :return: SqliteSaver 实例（每次任务中断/恢复共享同一 DB 文件）
     """
     global _checkpointer
@@ -85,22 +76,30 @@ def get_checkpointer() -> SqliteSaver:
     return _checkpointer
 
 
-def build_graph():
+_graph: Any | None = None  # 编译结果缓存（worker 生命周期内复用，避免每次 invoke 重新编译）
+
+
+def _assemble_graph():
     """装配并编译 LangGraph 状态机（含重试闭环 + SqliteSaver 断点持久化）。
+
+    节点引用在编译时从 app.agents.nodes 包动态解析：便于测试替换节点实现后
+    重新编译（配合 clear_graph_cache 使用）。
 
     :return: 已编译的可执行图
     """
+    from app.agents import nodes as agent_nodes  # 延迟导入：编译时取节点引用
+
     graph = StateGraph(DocAgentState)
 
     # ---- 注册节点 ----
-    graph.add_node(SUPERVISOR, supervisor_node)  # 主调度 / 文档解析
-    graph.add_node(RAG_SEARCHER, rag_searcher_node)  # 混合检索选模板
-    graph.add_node(PLANNER, planner_node)  # 双路径生成原子指令
-    graph.add_node(ENTRY_GUARD, entry_guard_node)  # 指令合法性校验
-    graph.add_node(EXECUTOR, executor_node)  # 逐条执行 + 备份
-    graph.add_node(VALIDATOR, validator_node)  # 五项覆盖率校验
-    graph.add_node(SUCCESS, success_node)  # 成功收尾
-    graph.add_node(ERROR, error_node)  # 失败收尾
+    graph.add_node(SUPERVISOR, agent_nodes.supervisor_node)  # 主调度 / 文档解析
+    graph.add_node(RAG_SEARCHER, agent_nodes.rag_searcher_node)  # 混合检索选模板
+    graph.add_node(PLANNER, agent_nodes.planner_node)  # 双路径生成原子指令
+    graph.add_node(ENTRY_GUARD, agent_nodes.entry_guard_node)  # 指令合法性校验
+    graph.add_node(EXECUTOR, agent_nodes.executor_node)  # 逐条执行 + 备份
+    graph.add_node(VALIDATOR, agent_nodes.validator_node)  # 五项覆盖率校验
+    graph.add_node(SUCCESS, agent_nodes.success_node)  # 成功收尾
+    graph.add_node(ERROR, agent_nodes.error_node)  # 失败收尾
 
     # ---- 主链路 ----
     graph.add_edge(START, SUPERVISOR)
@@ -115,21 +114,21 @@ def build_graph():
     # ---- EntryGuard 分支：合法→executor，非法→planner(LLM重试/兜底)，取消→error ----
     graph.add_conditional_edges(
         ENTRY_GUARD,
-        route_after_guard,
+        agent_nodes.route_after_guard,
         {EXECUTOR: EXECUTOR, PLANNER: PLANNER, ERROR: ERROR},
     )
 
     # ---- Executor 分支：成功→validator，失败→error ----
     graph.add_conditional_edges(
         EXECUTOR,
-        route_after_executor,
+        agent_nodes.route_after_executor,
         {VALIDATOR: VALIDATOR, ERROR: ERROR},
     )
 
     # ---- Validator 重试闭环：passed→success，未达标→planner(增量修补)，耗尽→error ----
     graph.add_conditional_edges(
         VALIDATOR,
-        route_after_validator,
+        agent_nodes.route_after_validator,
         {SUCCESS: SUCCESS, PLANNER: PLANNER, ERROR: ERROR},
     )
 
@@ -138,6 +137,24 @@ def build_graph():
     graph.add_edge(ERROR, END)
 
     return graph.compile(checkpointer=get_checkpointer())
+
+
+def build_graph():
+    """获取编译后的状态机（进程内缓存，首次调用时编译一次）。
+
+    :return: 已编译的可执行图
+    """
+    global _graph
+    if _graph is None:
+        _graph = _assemble_graph()
+    return _graph
+
+
+def clear_graph_cache() -> None:
+    """清空编译缓存与 checkpointer 单例（测试隔离用：替换节点实现后重新编译）。"""
+    global _graph, _checkpointer
+    _graph = None
+    _checkpointer = None
 
 
 def run_agent(initial_state: dict[str, Any]) -> dict[str, Any]:

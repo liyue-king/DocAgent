@@ -44,9 +44,41 @@ def validator_node(state: dict[str, Any]) -> dict[str, Any]:
     max_retry = settings.max_retry_count
     updates: dict[str, Any] = {}
 
+    # ---- 兜底直通守卫：entry_guard 保留原格式 → 不校验、不重试，直接成功 ----
+    # 语义对齐：fallback 分支承诺"未做任何样式修改"，此时再套模板覆盖率
+    # 判定必然不达标 → 会错误触发增量修补（把确定性格式又套回去）或重试耗尽
+    # 判 FAILED。这里显式短路，让"保留原格式"语义闭环。
+    if state.get("entry_guard_fallback"):
+        report = {
+            "passed": True,
+            "coverage": 1.0,
+            "total": 0,
+            "matched": 0,
+            "missed": [],
+        }
+        logs = notify(
+            state,
+            "规划异常兜底：已保留原格式直通输出（未做任何样式修改），校验通过",
+            NODE_NAME,
+            level=LogLevel.WARNING,
+            status=TaskStatus.VALIDATING,
+            progress=95,
+            step="保留原格式，校验通过",
+            agent_state_snapshot=report,  # 落库供前端结果预览
+        )
+        return {
+            "validation_report": report,
+            "agent_logs": logs,
+            "status": "done",
+        }
+
     try:
         doc = Document(output_file)  # 重新打开修改后的文档
-        report = compute_coverage(doc, template_config)  # 五项扫描
+        # v6.2：用户个性化覆盖（llm_overrides）作为验收基准传入，
+        # 被 LLM 覆盖的段维按用户目标值校验（不再被模板吞掉）
+        report = compute_coverage(
+            doc, template_config, state.get("llm_overrides") or {}
+        )  # 五项扫描
     except Exception as exc:
         msg = f"校验阶段读取文档失败：{exc}"
         report = {"passed": False, "coverage": 0.0, "total": 0, "matched": 0, "missed": []}
@@ -69,6 +101,11 @@ def validator_node(state: dict[str, Any]) -> dict[str, Any]:
             }
         )
         return updates
+
+    # 未实现需求明细透传进报告（前端展示"哪些个性化要求没做成"）
+    unmet = state.get("unmet_requirements") or []
+    if unmet:
+        report["unmet_requirements"] = unmet
 
     coverage = report["coverage"]
     total = report["total"]
@@ -105,6 +142,7 @@ def validator_node(state: dict[str, Any]) -> dict[str, Any]:
             progress=30,  # 进度回退至 30 重新推进
             step=f"校验未通过，AI重规划(第{new_retry}次)",
             agent_state_snapshot=report,  # 落库供前端结果预览
+            retry_count=new_retry,  # 落库：前端 retry_count 展示与黄色闪烁保持一致
         )
         updates.update(
             {
@@ -158,10 +196,13 @@ def validator_node(state: dict[str, Any]) -> dict[str, Any]:
 
 def route_after_validator(state: dict[str, Any]) -> str:
     """Validator 条件路由：
+    status=failed（校验读取失败等致命错误）→ error_node（短路防死循环）
     passed=True          → success_node
     passed=False 且未耗尽 → planner（增量修补）
     passed=False 且已耗尽 → error_node（强制失败）
     """
+    if state.get("status") == "failed":
+        return "error_node"  # 致命错误不回跳 planner（否则修补→再失败→无限循环）
     report = state.get("validation_report") or {}
     if report.get("passed"):
         return "success_node"

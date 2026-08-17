@@ -108,6 +108,7 @@ def process_document_task(task_id: str) -> dict[str, Any]:
     """
     # ---- 0. 加载任务 + 记录开始时间 ----
     try:
+        from app.agents.nodes._common import is_cancelled  # 延迟导入（取消标志判定）
         from app.crud.tasks import get_task, mark_started
         from app.db import SessionLocal
 
@@ -116,6 +117,22 @@ def process_document_task(task_id: str) -> dict[str, Any]:
             task = get_task(db, task_id)
             if task is None:  # 任务已被删除（如过期清理）
                 logger.warning("[worker] 任务不存在，跳过: %s", task_id)
+                return {}
+            # cancel 竞态守卫：任务在队列期间可能已被用户取消/清扫收尾，
+            # 此处先读终态 + 取消标志，已终态/已取消则直接跳过，
+            # 禁止 mark_started 覆盖 CANCELLED（Redis 标志先于 DB 提交，
+            # 两者都查，覆盖在途取消窗口）。
+            if task.status in (
+                TaskStatus.SUCCESS,
+                TaskStatus.FAILED,
+                TaskStatus.EXPIRED,
+                TaskStatus.CANCELLED,
+            ) or is_cancelled(task_id):
+                logger.info(
+                    "[worker] 任务已取消/终态(%s)，跳过处理: %s",
+                    task.status.value,
+                    task_id,
+                )
                 return {}
             mark_started(db, task_id)  # 记录 started_at
         finally:

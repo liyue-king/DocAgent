@@ -20,7 +20,7 @@ import logging  # 标准库日志
 import os  # 文件名提取
 from typing import Any  # 泛型类型
 
-from app.agents.nodes._common import build_object_key, notify  # 工具
+from app.agents.nodes._common import build_object_key, is_cancelled, notify  # 工具
 from app.config import settings  # MinIO 桶配置
 from app.models import LogLevel, TaskStatus  # 枚举
 from app.services.storage import storage  # MinIO 客户端
@@ -61,18 +61,33 @@ def error_node(state: dict[str, Any]) -> dict[str, Any]:
                 minio_key = ""
 
     # ---- 2. 更新 MySQL failed（回填输出路径便于兜底下载）----
-    # 终态守卫：用户已取消（status=cancelled）→ 不覆盖终态，仅保留输出路径
-    cancelled = False
+    # 终态守卫：用户已取消（Redis 标志 或 DB status=cancelled）→ 不覆盖终态，
+    # 仅保留输出路径。取消标志在 API 侧先于 DB 提交落 Redis，节点侧感知标志
+    # 时 DB 可能尚未置 cancelled，故此处主动补写 cancelled（幂等）。
+    cancelled = is_cancelled(task_id)  # Redis 标志优先（在途取消也能感知）
     try:
-        from app.crud.tasks import get_task, mark_failed, update_task  # 延迟导入
+        from app.crud.tasks import (  # 延迟导入
+            get_task,
+            mark_cancelled,
+            mark_failed,
+            update_task,
+        )
         from app.db import SessionLocal
 
         db = SessionLocal()
         try:
             current = get_task(db, task_id)
-            if current is not None and current.status == TaskStatus.CANCELLED:
+            if (
+                not cancelled
+                and current is not None
+                and current.status == TaskStatus.CANCELLED
+            ):
                 cancelled = True
-            if not cancelled:
+            if cancelled:
+                # 主动落 cancelled：防 API 的 mark_cancelled 提交在途导致 DB 未及更新
+                if current is None or current.status != TaskStatus.CANCELLED:
+                    mark_cancelled(db, task_id)
+            else:
                 mark_failed(db, task_id)
             if minio_key or output_file:
                 update_task(db, task_id, output_file_path=minio_key or output_file)

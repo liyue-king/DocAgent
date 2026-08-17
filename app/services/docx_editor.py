@@ -31,27 +31,61 @@ from docx.oxml.ns import qn  # 命名空间查询：设置中文字体 w:eastAsi
 
 logger = logging.getLogger(__name__)  # 模块级日志器
 
+# 中文字体别名前缀（西文字体走常规 w:ascii/hAnsi 通道，中文字体只写 eastAsia）
+_CJK_FONT_PREFIXES = (
+    "宋体",
+    "黑体",
+    "楷体",
+    "仿宋",
+    "隶书",
+    "幼圆",
+    "微软雅黑",
+    "等线",
+    "华文",
+    "方正",
+    "思源",
+    "SimSun",
+    "SimHei",
+    "KaiTi",
+    "FangSong",
+    "Microsoft YaHei",
+)
+
+
+def _is_cjk_font(font_name: str) -> bool:
+    """判断字体名是否属于中文字体：含 CJK 字符（宋体/黑体…）或知名别名。"""
+    return any("\u4e00" <= c <= "\u9fff" for c in font_name) or font_name.startswith(
+        _CJK_FONT_PREFIXES
+    )
+
+
 # =============================================================================
 # 原子操作函数
 # =============================================================================
 
 
 def _set_paragraph_font(para: Any, font_name: str) -> None:
-    """设置段落全部 run 的中西文字体（西文=font.name，中文=eastAsia）。
+    """设置段落全部 run 的字体。
+
+    - 中文字体（宋体/黑体…）：只写 w:eastAsia 槽，不写入 w:ascii/hAnsi，
+      避免中文字体名污染西文字体槽导致英文内容排版异常（fallback 字体缺失）。
+    - 西文字体：走 python-docx 常规通道（w:ascii + w:hAnsi）。
 
     :param para: python-docx Paragraph 对象
-    :param font_name: 字体名（如"黑体""宋体"）
+    :param font_name: 字体名（如"黑体""宋体"或"Times New Roman"）
     """
     for run in para.runs:  # 遍历段落内所有 run
-        run.font.name = font_name  # 西文字体
-        # 设置中文字体：通过 XML element 的 rPr/rFonts/w:eastAsia 属性
-        rPr = run._element.get_or_add_rPr()
-        rFonts = rPr.find(qn("w:rFonts"))
-        if rFonts is None:
-            from lxml import etree
+        if _is_cjk_font(font_name):
+            # 中文字体 → 仅设置 w:eastAsia
+            rPr = run._element.get_or_add_rPr()
+            rFonts = rPr.find(qn("w:rFonts"))
+            if rFonts is None:
+                from lxml import etree
 
-            rFonts = etree.SubElement(rPr, qn("w:rFonts"))
-        rFonts.set(qn("w:eastAsia"), font_name)
+                rFonts = etree.SubElement(rPr, qn("w:rFonts"))
+            rFonts.set(qn("w:eastAsia"), font_name)
+        else:
+            run.font.name = font_name  # 西文字体（w:ascii + w:hAnsi）
 
 
 def _set_paragraph_font_size(para: Any, size_pt: float) -> None:
@@ -125,6 +159,25 @@ def _set_paragraph_space(para: Any, before_pt: int, after_pt: int) -> None:
 # =============================================================================
 
 
+def _op_already_matches(node: dict[str, Any], op: dict[str, Any]) -> bool:
+    """段落级幂等判定：当前格式已达标则跳过该段（保护段内强调格式）。
+
+    读取口径与 docx_parser / compute_coverage 一致：
+    - font / font_size：段内首个 run（多数段落的主体格式）；
+    - bold：段内文本权重多数（多 run 段落的段首加粗引导语等局部强调不判整段）。
+    已达标段落再整段覆盖会毁掉段内强调（如段首加粗引导语），故显式跳过。
+    """
+    action = op.get("action")
+    if action == "set_bold":
+        return bool(node.get("bold")) == bool(op.get("bold", False))
+    if action == "set_font":
+        font = op.get("font") or ""
+        return font in {node.get("font_name") or "", node.get("font_east_asia") or ""}
+    if action == "set_font_size":
+        return abs((node.get("font_size_pt") or 0) - float(op.get("size_pt", 12))) <= 0.5
+    return False
+
+
 def apply_operations(dom: dict[str, Any], operations: list[dict[str, Any]]) -> None:
     """按原子指令队列逐条执行文档修改。
 
@@ -136,7 +189,10 @@ def apply_operations(dom: dict[str, Any], operations: list[dict[str, Any]]) -> N
         para_ids = op.get("para_ids", [])  # 目标段落 ID 列表
 
         for pid in para_ids:  # 遍历目标段落
-            para = dom["paragraphs"][pid]["para_obj"]  # 按 id 取段落对象
+            para_node = dom["paragraphs"][pid]  # 段落节点（含主格式判定）
+            para = para_node["para_obj"]  # 按 id 取段落对象
+            if _op_already_matches(para_node, op):
+                continue  # 该段此维度已达标 → 跳过（幂等，保护段内强调）
             if action == "set_font":
                 _set_paragraph_font(para, op.get("font", "宋体"))
             elif action == "set_font_size":
@@ -156,62 +212,20 @@ def apply_operations(dom: dict[str, Any], operations: list[dict[str, Any]]) -> N
 def apply_template(
     doc: Document, template_config: dict[str, Any]
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """根据模板配置生成并执行操作队列（高层方法，供 Planner/Executor 使用）。
+    """按模板配置生成并执行操作队列（测试/工具辅助，生产编排走 planner 生成队列）。
 
-    内部调用 build_dom 构建 DOM（段落引用与传入 doc 共享，修改即时生效）。
+    样式分组的**单一来源**是 app.agents.nodes.planner.build_style_ops —— 此处
+    直接委托，避免两处样式分组逻辑漂移（此前与本文件内联分组重复实现）。
 
     :param doc: 已打开的 python-docx Document 对象
     :param template_config: 模板的 config 字段（含 paragraph_styles）
     :return: (DOM 树, 执行的操作队列)——DOM 树供后续覆盖率统计使用
     """
-    from app.services.docx_parser import build_dom
+    from app.agents.nodes.planner import build_style_ops  # 样式分组单一来源
+    from app.services.docx_parser import build_dom, build_dom_serial
 
     dom = build_dom(doc)  # 基于已有 doc 构建 DOM（修改即时生效）
-    styles = template_config.get("paragraph_styles", {})  # 提取样式配置
-    operations: list[dict[str, Any]] = []  # 操作队列
-
-    # 按样式分组：遍历每个段落，根据其 heading_1/2/3/normal 生成操作
-    style_group: dict[str, list[int]] = {}  # {style: [para_id, ...]}
-    for p in dom["paragraphs"]:
-        s = p["style"]
-        if s == "normal" and p.get("keep_format"):
-            continue  # 保留原格式段落（封面字段/强调）不套模板
-        if s in ("heading_1", "heading_2", "heading_3", "normal"):
-            style_group.setdefault(s, []).append(p["id"])
-
-    # 对每种样式生成一组原子操作
-    for style_key, para_ids in style_group.items():
-        cfg = styles.get(style_key)
-        if cfg is None:
-            continue  # 模板中未定义该样式，跳过
-        ops: list[dict[str, Any]] = [
-            {"action": "set_font", "para_ids": para_ids, "font": cfg["font_name"]},
-            {
-                "action": "set_font_size",
-                "para_ids": para_ids,
-                "size_pt": cfg["font_size_pt"],
-            },
-            {
-                "action": "set_bold",
-                "para_ids": para_ids,
-                "bold": cfg.get("bold", False),
-            },
-            {
-                "action": "set_line_spacing",
-                "para_ids": para_ids,
-                "rule": cfg["line_spacing_rule"],
-                "value": cfg.get("line_spacing_value"),
-            },
-            {
-                "action": "set_paragraph_space",
-                "para_ids": para_ids,
-                "space_before_pt": cfg.get("space_before_pt", 0),
-                "space_after_pt": cfg.get("space_after_pt", 0),
-            },
-        ]
-        operations.extend(ops)
-
-    # 执行整组操作
+    operations = build_style_ops(template_config, build_dom_serial(dom))
     apply_operations(dom, operations)
     return dom, operations
 
@@ -259,7 +273,11 @@ def restore_doc(backup_bytes: bytes | None) -> Document:
 # =============================================================================
 
 
-def compute_coverage(doc: Document, template_config: dict[str, Any]) -> dict[str, Any]:
+def compute_coverage(
+    doc: Document,
+    template_config: dict[str, Any],
+    llm_overrides: dict[int, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """扫描文档样式覆盖率（Validator 判断是否重试的入参）。
 
     算法：基于已有 doc 构建 DOM → 逐段对比 **五项维度**（字体/字号/加粗/
@@ -268,8 +286,13 @@ def compute_coverage(doc: Document, template_config: dict[str, Any]) -> dict[str
     避免此前仅查三项导致的"假通过"。missed 明细携带 expected/actual/reason，
     供 Planner 做增量修补。
 
+    v6.2：**用户个性化覆盖（llm_overrides）成为验收基准**——被 LLM 覆盖的
+    (para_id, dim) 按用户目标值对比，不再按模板值（否则重试闭环会把
+    用户需求"修回"模板）。未覆盖的段维仍按模板验收。
+
     :param doc: 修改后的文档对象（在内存中）
     :param template_config: 模板的 config
+    :param llm_overrides: {para_id: {dim: 用户目标值}}（Planner LLM 路径产出）
     :return: {"coverage": 0.95, "total": 10, "matched": 8, "missed": [...],
               "passed": True}；missed 元素含 para_id/style/expected/actual/reason
     """
@@ -279,6 +302,7 @@ def compute_coverage(doc: Document, template_config: dict[str, Any]) -> dict[str
     new_dom = build_dom(doc)
 
     styles = template_config.get("paragraph_styles", {})
+    overrides = llm_overrides or {}
     total = 0  # 可评估的段落总数
     matched = 0  # 样式匹配的段落数
     missed: list[dict[str, Any]] = []  # 未匹配的段落详情
@@ -287,12 +311,18 @@ def compute_coverage(doc: Document, template_config: dict[str, Any]) -> dict[str
         s = p["style"]
         if s == "normal" and p.get("keep_format"):
             continue  # 保留原格式段落不参与覆盖率校验（不会被模板覆盖）
-        target = styles.get(s)  # 目标样式
-        if target is None:
+        base_target = styles.get(s)  # 模板目标样式
+        if base_target is None:
             continue  # 非 key 样式（other）不参与评估
         if p.get("run_count", 0) == 0:
             continue  # 空段落无可排版内容（无 run，字体/字号无法施加），不参与评估
+        if p.get("has_image") and not p.get("text"):
+            continue  # 纯图片/公式段（无文本）：无可排版内容，整段不参与评估
         total += 1
+
+        # v6.2：用户个性化覆盖合成到验收目标（被 LLM 覆盖的段维按用户值验收，
+        # 其余维度仍按模板值；expected 明细自动展示用户目标）
+        target = _apply_overrides(base_target, overrides.get(p["id"]) or {})
 
         failed_dims: list[str] = []  # 不匹配的维度名列表
         # ---- 1. 字体：目标字体命中西文字体或中文字体任一即可 ----
@@ -307,7 +337,9 @@ def compute_coverage(doc: Document, template_config: dict[str, Any]) -> dict[str
         if p["bold"] != target.get("bold", False):
             failed_dims.append("bold")
         # ---- 4. 行距：规则与值均需匹配（v5.2 新增）----
-        if not _line_spacing_match(p, target):
+        # 含图片/形状/公式的段落豁免：EXACTLY 固定行距会裁切高于行高的
+        # 图片/公式（Word 渲染行为，不可逆），planner 也不对该段生成行距指令
+        if not p.get("has_image") and not _line_spacing_match(p, target):
             failed_dims.append("line_spacing")
         # ---- 5. 段前段后距：允许 0.5pt 误差（v5.2 新增）----
         if not _paragraph_space_match(p, target):
@@ -355,6 +387,33 @@ def compute_coverage(doc: Document, template_config: dict[str, Any]) -> dict[str
         "missed": missed,
         "passed": passed,
     }
+
+
+def _apply_overrides(
+    target: dict[str, Any], para_overrides: dict[str, Any]
+) -> dict[str, Any]:
+    """把用户个性化覆盖（llm_overrides）合成进模板验收目标。
+
+    仅覆盖声明过的维度（key 存在才覆盖），未覆盖维度保持模板值。
+
+    :param target: 模板目标样式配置（paragraph_styles[style]）
+    :param para_overrides: {dim: 用户目标值}（Planner LLM 路径产出）
+    :return: 合成后的验收目标（expected 明细可正确展示用户目标）
+    """
+    merged = dict(target)
+    mapping = {
+        "font": "font_name",
+        "font_size": "font_size_pt",
+        "bold": "bold",
+        "line_spacing_rule": "line_spacing_rule",
+        "line_spacing_value": "line_spacing_value",
+        "space_before_pt": "space_before_pt",
+        "space_after_pt": "space_after_pt",
+    }
+    for dim, key in mapping.items():
+        if dim in para_overrides:
+            merged[key] = para_overrides[dim]
+    return merged
 
 
 def _line_spacing_match(p: dict[str, Any], target: dict[str, Any]) -> bool:

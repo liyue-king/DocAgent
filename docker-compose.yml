@@ -236,7 +236,7 @@ services:
     networks:
       - docagent-net
 
-  # ---------- 8. 前端（nginx 静态托管 + /api /mcp 反代，80/443） ----------
+  # ---------- 8. frontend: nginx static hosting + /api reverse proxy (80/443) ----------
   frontend:
     build:
       context: .

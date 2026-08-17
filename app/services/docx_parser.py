@@ -53,6 +53,8 @@ def _normalize_style(style_name: str) -> str:
         return "normal"  # 视觉上等同正文的样式统一按正文处理
     if re.search(r"副标题|subtitle", name):
         return "heading_2"  # 副标题视为二级标题
+    if name == "title" or name.endswith("标题"):
+        return "heading_1"  # Word "Title"/"标题"（封面大标题常用，此前落到 other 不被处理）
     # 无法匹配的样式归为 other（如列表/引用/题注）
     return "other"
 
@@ -68,19 +70,18 @@ _DATE_RE = re.compile(r"^[0-9]{4}\s*年")
 
 
 def _infer_heading_level(
-    para: Any,
     style_key: str,
     text: str,
     max_size_pt: float,
     any_bold: bool,
 ) -> str:
-    """按内容特征推断标题层级（方案 A：样式名不是标题但外观像标题时识别出来）。
+    """按内容特征推断标题层级（方案 A：样式名不是标题但内容像标题时识别出来）。
 
-    优先看章节编号（第X章 / 一、 / （一） / 1.1 / 1.1.1），再看外观
-    （居中 + 加粗 + 大字号 + 文本短）。封面字段（如"姓    名 李  越"）
-    含连续空格，视为排版占位而非标题，不参与推断。
+    仅用**编号特征**（第X章 / 一、 / （一） / 1.1 / 1.1.1）做推断——编号是
+    结构信息，可信度高。**不再使用外观兜底**（居中/加粗/大字号）：落款、
+    强调句与标题视觉特征同构（居中加粗短文本），外观推断必然误判，
+    宁可漏判（保持原格式）也不误改。
 
-    :param para: python-docx 段落对象（用于读取对齐方式）
     :param style_key: 样式名归一化结果
     :param text: 段落纯文本（已 strip）
     :param max_size_pt: 段落内最大字号（磅）
@@ -98,10 +99,7 @@ def _infer_heading_level(
     if len(text) > 60:
         return style_key  # 超过 60 字的段落视为正文，不判标题
 
-    centered = bool(
-        para.alignment is not None and para.alignment.name == "CENTER"
-    )
-    # ---- 编号优先 ----
+    # ---- 编号优先（结构信息，可信）----
     if _H1_CHAPTER_RE.match(text):
         return "heading_1"
     if _H3_DOT_RE.match(text) and (any_bold or max_size_pt >= 12):
@@ -114,13 +112,6 @@ def _infer_heading_level(
         return "heading_1"
     if _H1_DOT_RE.match(text) and (any_bold or max_size_pt >= 14):
         return "heading_1"
-    # ---- 外观兜底（无编号）----
-    if centered and any_bold and max_size_pt >= 14 and len(text) <= 40:
-        return "heading_1"  # 居中大标题
-    if any_bold and max_size_pt >= 16 and len(text) <= 30:
-        return "heading_2"
-    if any_bold and max_size_pt >= 14 and len(text) <= 20:
-        return "heading_3"
     return style_key
 
 
@@ -182,6 +173,63 @@ def _read_paragraph_space(para: Any) -> tuple[float, float]:
     )
 
 
+def _read_outline_level(para: Any) -> int | None:
+    """读取段落的大纲级别（w:outlineLvl，0-9）。
+
+    Word 最常用的标题实现方式之一："正文样式 + 大纲级别"（样式级或段落级）。
+    python-docx 不暴露该属性，必须直读 XML。取值语义：
+        0=标题1 … 8=标题9（数字越大级别越低）；9=明确正文文本（body text）。
+
+    查找顺序：段落自身 pPr → 样式链（basedOn 逐级上溯，防循环引用）。
+
+    :param para: python-docx Paragraph 对象
+    :return: 大纲级别 int；未设置返回 None
+    """
+
+    def _level_of_pPr(pPr: Any) -> int | None:
+        if pPr is None:
+            return None
+        ol = pPr.find(qn("w:outlineLvl"))
+        if ol is None:
+            return None
+        try:
+            return int(ol.get(qn("w:val")))
+        except (TypeError, ValueError):
+            return None  # 非法取值视为未设置
+
+    # 1) 段落自身 pPr（手动设置的大纲级别）
+    level = _level_of_pPr(para._element.pPr)
+    if level is not None:
+        return level
+    # 2) 样式链（自定义样式定义的大纲级别）
+    seen: set[int] = set()
+    style = para.style
+    while style is not None and id(style) not in seen:
+        seen.add(id(style))
+        level = _level_of_pPr(style.element.pPr)
+        if level is not None:
+            return level
+        style = style.base_style  # 沿 basedOn 链上溯（可能为 None）
+    return None
+
+
+def _has_embedded_content(para: Any) -> bool:
+    """段落是否含嵌入式内容（图片/形状/公式）。
+
+    这些内容对段落行距敏感：EXACTLY 固定行距下，高于行高的图片/公式会被
+    Word 直接裁切显示（不可逆）。检测到后，行距/段距维度应豁免（见
+    planner.build_style_ops 与 docx_editor.compute_coverage 的联动）。
+
+    :param para: python-docx Paragraph 对象
+    :return: 含 w:drawing（图片/形状）/ w:pict（旧式图片）/ m:oMath（公式）
+    """
+    tags = (qn("w:drawing"), qn("w:pict"), qn("m:oMath"))
+    for el in para._element.iter():
+        if el.tag in tags:
+            return True
+    return False
+
+
 def build_dom_serial(dom: dict[str, Any]) -> dict[str, Any]:
     """从完整 DOM 提取可序列化部分（剔除 para_obj 引用）。
 
@@ -211,6 +259,8 @@ def build_dom_serial(dom: dict[str, Any]) -> dict[str, Any]:
                 "space_before_pt": p["space_before_pt"],
                 "space_after_pt": p["space_after_pt"],
                 "run_count": p["run_count"],
+                "outline_lvl": p["outline_lvl"],
+                "has_image": p["has_image"],
             }
         )
     return {
@@ -251,16 +301,19 @@ def build_dom(doc: Document) -> dict[str, Any]:
         # ----- 提取字体信息：取第一个 run 的格式（多数段落只有 1 个 run）-----
         max_font_size_pt = 0.0
         any_bold = False
+        bold_run_len = 0  # 加粗 run 的累计文本长度（多 run 段落主格式判定用）
+        text_len = 0  # 段落全部 run 的文本总长
         if para.runs:
             run = para.runs[0]  # 首个 run 代表段落主体格式
             font_name = run.font.name  # 西文字体
             font_size = run.font.size
             font_size_pt = round(font_size.pt, 1) if font_size else 0  # 字号（磅）
-            bold = run.font.bold is True  # 是否加粗（排除 None 和 False）
             font_east_asia = _read_east_asia_font(run)  # 中文字体（w:eastAsia）
             for r in para.runs:
+                text_len += len(r.text)
                 if r.font.bold:
                     any_bold = True
+                    bold_run_len += len(r.text)
                 if r.font.size is not None:
                     max_font_size_pt = max(max_font_size_pt, round(r.font.size.pt, 1))
         else:
@@ -271,10 +324,32 @@ def build_dom(doc: Document) -> dict[str, Any]:
         if max_font_size_pt == 0:
             max_font_size_pt = font_size_pt
 
-        # 智能标题识别：样式名不是标题但内容/外观像标题 → 提升层级
-        style_key = _infer_heading_level(
-            para, style_key, text, max_font_size_pt, any_bold
-        )
+        # 段落加粗 = 按文本权重取多数（多 run 段落的段首加粗引导语等局部强调
+        # 不判整段加粗，避免整段统一覆盖毁掉段内强调格式）
+        if para.runs:
+            if text_len:
+                bold = bold_run_len * 2 >= text_len
+            else:
+                bold = any_bold
+        else:
+            bold = False
+
+        # ---- 大纲级别（Word 结构化信息，最高优先）----
+        outline_lvl = _read_outline_level(para)
+        has_image = _has_embedded_content(para)
+        if outline_lvl is not None and outline_lvl <= 8:
+            # 0→heading_1、1→heading_2、2→heading_3；3~8（四级及以上）降级三级
+            if outline_lvl <= 2:
+                style_key = f"heading_{outline_lvl + 1}"
+            else:
+                style_key = "heading_3"
+        elif outline_lvl == 9:
+            pass  # 明确正文（body text）：尊重文档声明，不走编号启发式
+        else:
+            # 智能标题识别：样式名不是标题但内容像标题（仅编号特征，无外观兜底）
+            style_key = _infer_heading_level(
+                style_key, text, max_font_size_pt, any_bold
+            )
         # 保留原格式标记：正文样式的段落原本有加粗（封面字段/强调）→ 模板不强覆盖
         keep_format = style_key == "normal" and any_bold
 
@@ -300,6 +375,8 @@ def build_dom(doc: Document) -> dict[str, Any]:
             "space_before_pt": space_before_pt,  # 段前距（磅）
             "space_after_pt": space_after_pt,  # 段后距（磅）
             "run_count": len(para.runs),  # run 数量（0=空段落，无可排版内容）
+            "outline_lvl": outline_lvl,  # 大纲级别（0-9，None=未设置；结构化标题识别）
+            "has_image": has_image,  # 含图片/形状/公式（行距裁切风险，三端豁免行距维度）
             "para_obj": para,  # python-docx 段落对象引用（编辑器操作）
         }
         paragraphs.append(node)

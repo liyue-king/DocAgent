@@ -64,6 +64,14 @@ class DocAgentState(TypedDict):
     planner_mode: Literal["deterministic", "llm_augmented"]  # 当前 Planner 路径
     planner_llm_calls: int  # 本轮 LLM 调用次数（含重试）
 
+    # ── LLM 个性化需求（v6.2：用户需求成为验收基准，防重试闭环吞掉覆盖）──
+    llm_overrides: dict[int, dict[str, Any]]  # {para_id: {dim: 用户目标值}}
+    #   planner 把 LLM 合法指令转成"目标状态声明"：validator 验收与 planner
+    #   修补时，凡被覆盖的 (para_id, dim) 一律用用户目标值作基准（与模板平级）
+    unmet_requirements: list[dict[str, Any]]  # [{"action","reason","detail"}]
+    #   被丢弃的 LLM 指令（值非法/越界/超出能力白名单），前端可见提示
+    llm_degraded: bool  # LLM 不可用/未生效标记（个性化需求按模板处理）
+
     # ── 控制 ──
     status: Literal[
         "idle", "retrieving", "planning", "executing", "validating", "done", "failed"

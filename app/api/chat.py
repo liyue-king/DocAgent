@@ -125,7 +125,7 @@ def chat(
             sources = user_hits + hits + template_hits
     except KnowledgeUnavailable as exc:
         return _err(1401, f"知识库检索失败：{exc}")
-    except Exception as exc:  # 兜底：任何未预期异常都转为业务错误，避免 500
+    except Exception:  # 兜底：任何未预期异常都转为业务错误，避免 500
         logger.exception("[chat] 聊天处理异常")
         return _err(1499, "聊天服务暂时不可用，请稍后再试")
 
